@@ -10,7 +10,11 @@ You wire nodes together and the graph is compiled live into one GPU shader. Ever
 
 *The four built-in demos, rendered by the app on a software GPU at low resolution.*
 
-## Run it
+## Try it
+
+**Live:** https://derflowx.github.io/awesome/ (Chrome, Edge or Arc on desktop)
+
+## Run it locally
 
 ```bash
 npm install
