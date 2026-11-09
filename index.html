@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fluxion</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand"><span class="logo"></span>FLUXION</div>
+        <select id="demo" title="Load a demo scene"></select>
+        <div class="tb-group">
+          <button id="btn-new" title="New scene">New</button>
+          <button id="btn-open" title="Open .flux.json">Open</button>
+          <button id="btn-save" title="Save .flux.json (Ctrl+S)">Save</button>
+          <button id="btn-share" title="Copy a shareable link">Share link</button>
+        </div>
+        <div class="tb-group">
+          <button id="btn-undo" title="Undo (Ctrl+Z)">&#8630;</button>
+          <button id="btn-redo" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
+        </div>
+        <div class="tb-group">
+          <button id="btn-orbit" title="Auto-orbit the camera">Orbit</button>
+          <button id="btn-snap" title="Save a PNG of the viewport">Snapshot</button>
+          <button id="btn-max" title="Maximize viewport (`)">Maximize</button>
+        </div>
+        <div class="spacer"></div>
+        <div id="status" class="status"></div>
+      </header>
+      <main class="split" id="split">
+        <section class="viewport" id="viewport">
+          <canvas id="view"></canvas>
+          <div class="hud" id="hud"></div>
+          <div class="viewport-error" id="gpu-error" hidden></div>
+          <div class="viewport-hint">drag: orbit &middot; shift/right-drag: pan &middot; wheel: zoom &middot; double-click: reset</div>
+        </section>
+        <div class="splitter" id="splitter"></div>
+        <section class="editor" id="editor"></section>
+      </main>
+      <footer id="timeline"></footer>
+      <div id="toast" class="toast"></div>
+      <input type="file" id="file" accept=".json,application/json" hidden />
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

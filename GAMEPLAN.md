@@ -66,14 +66,14 @@ Bloom, anamorphic flares, chromatic aberration, film grain, depth of field, temp
 ## 4. Build phases
 
 ### Phase 0: Foundation (first build)
-- [ ] Vite + TypeScript + WebGPU bootstrap, with a fallback message for browsers without WebGPU
-- [ ] Node graph core: typed sockets, evaluation, undo/redo, save/load as JSON
-- [ ] Canvas node editor: pan, zoom, wire dragging, quick-add search
-- [ ] Graph-to-WGSL compiler for SDF scenes, with live recompile
-- [ ] Viewport: raymarched SDF, orbit camera, bloom and tone mapping
-- [ ] Signal nodes: Time, LFO, Noise, Spring, Keyframe curve
-- [ ] Timeline: play, scrub, loop
-- [ ] 3 demo scenes that look great out of the box
+- [x] Vite + TypeScript + WebGPU bootstrap, with a fallback message for browsers without WebGPU
+- [x] Node graph core: typed sockets, evaluation, undo/redo, save/load as JSON
+- [x] Canvas node editor: pan, zoom, wire dragging, quick-add search
+- [x] Graph-to-WGSL compiler for SDF scenes, with live recompile
+- [x] Viewport: raymarched SDF, orbit camera, bloom and tone mapping
+- [x] Signal nodes: Time, LFO, Noise, Spring, Keyframe curve
+- [x] Timeline: play, scrub, loop
+- [x] 4 demo scenes that look great out of the box
 
 ### Phase 1: Motion power
 - [ ] GPU particles plus forces (curl, attractor, vortex)
