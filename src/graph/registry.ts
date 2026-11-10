@@ -10,6 +10,9 @@ export const FONTS: Record<string, string> = {
   mono: '700 150px "JetBrains Mono"',
   sans: '800 150px "Inter"',
   script: '400 150px "Pacifico"',
+  tactical: '400 150px "Black Ops One"',
+  wide: '400 150px "Michroma"',
+  terminal: '400 150px "Share Tech Mono"',
 };
 
 export interface InputDef {
@@ -183,6 +186,7 @@ function mathGpu(op: string, a: string, b: string): string {
 }
 
 const LFO_WAVES = ['sine', 'triangle', 'saw', 'square', 'bounce'];
+export const LOOKS = ['cinematic', 'black mirror', 'thermal', 'night vision', 'bleach', 'x-ray'];
 
 // ---------- automatic camera ----------
 export const CAM_MODES = ['orbit', 'push-in', 'crane', 'flyby', 'spiral', 'top-down', 'vertigo'];
@@ -745,7 +749,7 @@ const defs: NodeDef[] = [
   // ===== Material =====
   {
     type: 'material', title: 'Material', category: 'Material', domain: 'gpu', output: 'sdf',
-    description: 'Surface look: color, roughness, metal, glow and thin-film iridescence.',
+    description: 'Surface look: color, roughness, metal, glow, thin-film iridescence, plus a glowing tactical scan grid.',
     inputs: [
       { name: 'shape', type: 'sdf' },
       { name: 'color', type: 'color', default: [0.9, 0.9, 0.95] },
@@ -753,12 +757,28 @@ const defs: NodeDef[] = [
       { name: 'metallic', type: 'float', default: 0, min: 0, max: 1, step: 0.01 },
       { name: 'emission', type: 'float', default: 0, min: 0, step: 0.01 },
       { name: 'iridescence', type: 'float', default: 0, min: 0, max: 1, step: 0.01 },
+      { name: 'grid', label: 'scan grid', type: 'float', default: 0, min: 0, step: 0.05 },
+      { name: 'gridScale', label: 'grid scale', type: 'float', default: 4, min: 0.1, step: 0.1 },
+      { name: 'gridColor', label: 'grid color', type: 'color', default: [1, 0.1, 0.08] },
     ],
     gpu: (g) => `var h = ${g.in('shape')};
   h.col = ${g.in('color')};
   h.mat = vec4f(clamp(${g.in('roughness')}, 0.0, 1.0), clamp(${g.in('metallic')}, 0.0, 1.0), max(${g.in('emission')}, 0.0), clamp(${g.in('iridescence')}, 0.0, 1.0));
+  let gi = ${g.in('grid')};
+  if (gi > 0.0) {
+    let gs = ${g.in('gridScale')};
+    let gq = abs(fract(p * gs + 0.5) - 0.5) / gs;
+    let lw = 0.012;
+    let line = 1.0 - smoothstep(0.0, lw, min(gq.x, min(gq.y, gq.z)));
+    let sweep = fract(U.fx.z * 0.22) * 8.0 - 4.0;
+    let band = exp(-pow((p.y - sweep) * 3.0, 2.0));
+    let gc = ${g.in('gridColor')};
+    h.col = mix(h.col, gc, clamp(line + band * 0.3, 0.0, 1.0));
+    h.mat.z += gi * (line * (0.35 + band * 2.0) + band * 0.25);
+  }
   return h;`,
   },
+
 
   // ===== Text =====
   {
@@ -959,9 +979,13 @@ const defs: NodeDef[] = [
   // ===== Particles =====
   {
     type: 'particles', title: 'Particles', category: 'FX', domain: 'cpu', output: 'particles',
-    description: 'Up to 1M GPU particles in curl-noise flow. Cling makes them crawl over your shapes and text.',
-    params: [{ name: 'emitter', kind: 'enum', options: ['surface', 'sphere', 'ring', 'burst', 'rain'], default: 'surface' }],
+    description: 'Up to 1M GPU particles in curl-noise flow. They cling to the scene, or to their own shape input (which stays invisible: pure particle sculptures). Streaks + trails for light painting.',
+    params: [
+      { name: 'emitter', kind: 'enum', options: ['surface', 'sphere', 'ring', 'burst', 'rain'], default: 'surface' },
+      { name: 'colorMode', label: 'color', kind: 'enum', options: ['life', 'speed', 'surface', 'spectral'], default: 'life' },
+    ],
     inputs: [
+      { name: 'shape', label: 'sculpt (optional)', type: 'sdf' },
       { name: 'count', type: 'float', default: 60000, min: 100, max: 1000000, step: 1000 },
       { name: 'size', type: 'float', default: 0.012, min: 0.001, step: 0.001 },
       { name: 'speed', type: 'float', default: 0.6, step: 0.01 },
@@ -973,22 +997,46 @@ const defs: NodeDef[] = [
       { name: 'intensity', type: 'float', default: 4, min: 0, step: 0.05 },
       { name: 'color', type: 'color', default: [0.3, 1, 0.9] },
       { name: 'color2', label: 'fade to', type: 'color', default: [1, 0.2, 0.6] },
+      { name: 'streak', type: 'float', default: 0, min: 0, step: 0.005 },
+      { name: 'trails', type: 'float', default: 0, min: 0, max: 0.985, step: 0.005 },
+      { name: 'vortex', type: 'float', default: 0, step: 0.01 },
+      { name: 'attract', type: 'float', default: 0, step: 0.01 },
     ],
     cpu: (i, c) => ({
       kind: 'particles', emitter: String(c.params.emitter), count: Math.round(n(i.count)), size: n(i.size), speed: n(i.speed),
       turbulence: n(i.turbulence), cling: n(i.cling), gravity: n(i.gravity), life: n(i.life), spread: n(i.spread),
       intensity: n(i.intensity), color: v3(i.color), color2: v3(i.color2),
+      colorMode: String(c.params.colorMode ?? 'life'), streak: n(i.streak), trails: Math.min(0.985, Math.max(0, n(i.trails))),
+      vortex: n(i.vortex), attract: n(i.attract),
     }),
+  },
+
+  // ===== HUD =====
+  {
+    type: 'hud', title: 'HUD', category: 'FX', domain: 'cpu', output: 'hud',
+    description: 'Heads-up display over the frame: tactical reticle, surveillance tracking or drone telemetry. Baked into exported video.',
+    params: [
+      { name: 'style', kind: 'enum', options: ['tactical', 'surveillance', 'drone', 'minimal'], default: 'tactical' },
+      { name: 'label', kind: 'text', default: 'TARGET ACQUIRED' },
+    ],
+    inputs: [
+      { name: 'opacity', type: 'float', default: 0.85, min: 0, max: 1, step: 0.01 },
+      { name: 'color', type: 'color', default: [1, 0.12, 0.08] },
+      { name: 'seed', type: 'float', default: 1, step: 1 },
+    ],
+    cpu: (i, c) => ({ kind: 'hud', style: String(c.params.style), label: String(c.params.label ?? ''), opacity: n(i.opacity), color: v3(i.color), seed: n(i.seed) }),
   },
 
   // ===== Output =====
   {
     type: 'output', title: 'Output', category: 'Output', domain: 'cpu', output: null,
-    description: 'The final render: scene, environment light and lens effects.',
+    description: 'The final render: scene, camera, particles, HUD, light, lens effects and film look.',
+    params: [{ name: 'look', kind: 'enum', options: LOOKS, default: 'cinematic' }],
     inputs: [
       { name: 'shape', type: 'sdf' },
       { name: 'camera', type: 'camera' },
       { name: 'particles', type: 'particles' },
+      { name: 'hud', type: 'hud' },
       { name: 'sky', type: 'color', default: [0.05, 0.06, 0.12] },
       { name: 'horizon', type: 'color', default: [0.35, 0.2, 0.45] },
       { name: 'light', type: 'color', default: [1, 0.92, 0.85] },
@@ -1006,6 +1054,10 @@ const defs: NodeDef[] = [
       { name: 'glitch', type: 'float', default: 0, min: 0, step: 0.01 },
       { name: 'letterbox', type: 'float', default: 0, min: 0, max: 1, step: 0.01 },
       { name: 'hue', label: 'hue shift', type: 'float', default: 0, step: 0.005 },
+      { name: 'rays', label: 'god rays', type: 'float', default: 0, min: 0, step: 0.01 },
+      { name: 'outline', type: 'float', default: 0, min: 0, max: 2, step: 0.01 },
+      { name: 'scanlines', type: 'float', default: 0, min: 0, max: 1, step: 0.01 },
+      { name: 'pixelate', type: 'float', default: 0, min: 0, step: 0.5 },
     ],
   },
 ];

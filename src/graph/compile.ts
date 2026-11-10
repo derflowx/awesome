@@ -22,7 +22,7 @@ export interface CompileResult {
   gpuNodes: number;
 }
 
-const WGSL_TYPE: Record<SocketType, string> = { float: 'f32', vec3: 'vec3f', color: 'vec3f', sdf: 'Sd', camera: 'f32', particles: 'f32' };
+const WGSL_TYPE: Record<SocketType, string> = { float: 'f32', vec3: 'vec3f', color: 'vec3f', sdf: 'Sd', camera: 'f32', particles: 'f32', hud: 'f32' };
 
 function convert(expr: string, from: SocketType, to: SocketType): string {
   if (from === 'float' && (to === 'vec3' || to === 'color')) return `vec3f(${expr})`;
@@ -93,6 +93,12 @@ export function compileGraph(doc: GraphDoc, an: Analysis): CompileResult {
   const out = doc.nodes.find((n) => n.type === 'output');
   const shape = out ? inputExpr(out, 'shape', 'p') : 'sdEmpty()';
   fns.push(`fn sceneMap(p: vec3f) -> Sd {\n  return ${shape};\n}`);
+
+  // Particles can follow their own (possibly invisible) shape instead of the scene.
+  const pLink = out ? an.linkInto.get(`${out.id}:particles`) : undefined;
+  const pNode = pLink ? byId.get(pLink.from) : undefined;
+  const pShape = pNode && an.linkInto.get(`${pNode.id}:shape`) ? inputExpr(pNode, 'shape', 'p') : 'sceneMap(p)';
+  fns.push(`fn particleMap(p: vec3f) -> Sd {\n  return ${pShape};\n}`);
 
   return { code: fns.join('\n\n'), slots, errors, gpuNodes: emitted.size };
 }

@@ -6,6 +6,8 @@ import type { Renderer } from '../gpu/renderer';
 import type { TextAtlas } from '../gpu/textAtlas';
 import type { OrbitCamera } from '../ui/camera';
 import { buildFrame } from '../engine';
+import { drawHud } from '../ui/hud';
+import type { HudValue, Vec3 } from '../graph/types';
 
 export interface ExportOptions {
   width: number;
@@ -94,17 +96,25 @@ export async function exportVideo(
   const params = new Float32Array(ctx.compiled.slots.length * 4 + 4096);
   const total = Math.max(1, Math.round(o.duration * o.fps));
   const S = Math.max(1, Math.round(o.samples));
+  let hudCanvas: OffscreenCanvas | null = null;
   try {
     for (let i = 0; i < total; i++) {
       if (signal.aborted) throw new DOMException('Export cancelled', 'AbortError');
       if (encErr) throw encErr;
+      let hud: HudValue | null = null;
+      let hudState: { camPos: Vec3; fwd: Vec3; right: Vec3; up: Vec3; tanHalfFov: number; target: Vec3 } | null = null;
       for (let s = 0; s < S; s++) {
         const t = o.start + (i + (S > 1 ? (s / S) * o.shutter : 0)) / o.fps;
         const values = evaluator.evaluate(ctx.doc, ctx.an, t);
-        const { frame } = buildFrame({
+        const built = buildFrame({
           doc: ctx.doc, an: ctx.an, values, compiled: ctx.compiled, params, atlas: ctx.atlas, t,
           orbit: ctx.orbit, useGraphCamera: ctx.useGraphCamera,
         });
+        const frame = built.frame;
+        if (s === 0) {
+          hud = built.hud;
+          hudState = { camPos: frame.camPos, fwd: frame.fwd, right: frame.right, up: frame.up, tanHalfFov: frame.tanHalfFov, target: built.target };
+        }
         frame.sampleIndex = s;
         frame.steps = 260;
         frame.particleReset = i === 0 && s === 0;
@@ -113,10 +123,17 @@ export async function exportVideo(
       }
       const img = await ctx.renderer.capture();
       if (!img) throw new Error('Frame capture failed');
-      const vf = new VideoFrame(img.data, {
-        format: 'RGBA', codedWidth: img.width, codedHeight: img.height,
-        timestamp: Math.round((i * 1e6) / o.fps), duration: Math.round(1e6 / o.fps),
-      });
+      const ts = { timestamp: Math.round((i * 1e6) / o.fps), duration: Math.round(1e6 / o.fps) };
+      let vf: VideoFrame;
+      if (hud && hudState) {
+        hudCanvas ??= new OffscreenCanvas(img.width, img.height);
+        const hg = hudCanvas.getContext('2d')!;
+        hg.putImageData(img, 0, 0);
+        drawHud(hg, img.width, img.height, hud, { ...hudState, t: o.start + i / o.fps, shift: [0, 0] });
+        vf = new VideoFrame(hudCanvas, ts);
+      } else {
+        vf = new VideoFrame(img.data, { format: 'RGBA', codedWidth: img.width, codedHeight: img.height, ...ts });
+      }
       venc.encode(vf, { keyFrame: i % (o.fps * 2) === 0 });
       vf.close();
       while (venc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 5));

@@ -189,3 +189,29 @@ describe('motion nodes', () => {
     expect(res.slots.some((s) => s.data && s.input === 'atlas')).toBe(true);
   });
 });
+
+describe('ops & anadol features', () => {
+  it('particles with a sculpt shape compile their own particleMap', () => {
+    const g = demoGraph('Machine Hallucination');
+    const res = compileGraph(g.doc, analyze(g.doc));
+    const pm = res.code.split('fn particleMap(p: vec3f) -> Sd {')[1];
+    expect(pm).toBeDefined();
+    expect(pm).not.toContain('sceneMap(p)');
+    expect(res.code).toContain('fn sceneMap(p: vec3f) -> Sd {\n  return sdEmpty();');
+  });
+
+  it('particleMap falls back to the scene without a sculpt shape', () => {
+    const g = demoGraph('Title Sequence');
+    const res = compileGraph(g.doc, analyze(g.doc));
+    expect(res.code).toContain('fn particleMap(p: vec3f) -> Sd {\n  return sceneMap(p);');
+  });
+
+  it('HUD node produces a hud value with its label', () => {
+    const g = demoGraph('Surveillance State');
+    const an = analyze(g.doc);
+    const hud = g.doc.nodes.find((n) => n.type === 'hud')!;
+    const v = new Evaluator().evaluate(g.doc, an, 1).get(hud.id) as { kind: string; label: string };
+    expect(v.kind).toBe('hud');
+    expect(v.label).toContain('SUBJECT');
+  });
+});

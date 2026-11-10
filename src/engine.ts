@@ -1,7 +1,8 @@
 import { asFloat, asVec3, readInput, type Analysis } from './graph/evaluate';
 import { fillSlots, type CompileResult } from './graph/compile';
-import type { CameraValue, CpuValue, GraphDoc, ParticleValue, Vec3 } from './graph/types';
+import type { CameraValue, CpuValue, GraphDoc, HudValue, ParticleValue, Vec3 } from './graph/types';
 import type { FrameInputs } from './gpu/renderer';
+import { LOOKS } from './graph/registry';
 import type { TextAtlas } from './gpu/textAtlas';
 import type { OrbitCamera } from './ui/camera';
 
@@ -52,6 +53,9 @@ export interface BuiltFrame {
   graphCamera: boolean;
   /** Values that, if unchanged, mean the image can keep refining. */
   signature: Float32Array;
+  hud: HudValue | null;
+  /** World point the camera aims at. */
+  target: Vec3;
 }
 
 export function buildFrame(c: FrameContext): BuiltFrame {
@@ -82,14 +86,18 @@ export function buildFrame(c: FrameContext): BuiltFrame {
     steps: 180, sampleIndex: 0, params: c.params,
     exposure: f('exposure'), bloom: f('bloom'), vignette: f('vignette'), grain: f('grain'), aberration: f('aberration'),
     flash: f('flash'), glitch: f('glitch'), letterbox: f('letterbox'), hue: f('hue'),
+    look: Math.max(0, LOOKS.indexOf(String(out?.params.look ?? 'cinematic'))),
+    rays: f('rays'), outline: f('outline'), scanlines: f('scanlines'), pixelate: f('pixelate'),
     particles: parts && parts.kind === 'particles' ? parts : null,
     particleDt: 0,
     particleReset: false,
   };
   const signature = new Float32Array([
     ...b.pos, ...b.fwd, ...b.up, b.tanHalfFov, ...frame.sky, ...frame.horizon, ...frame.sun, ...sunDir,
-    frame.glow, frame.fog, frame.flash, frame.glitch, frame.hue,
+    frame.glow, frame.fog, frame.flash, frame.glitch, frame.hue, frame.look, frame.rays, frame.outline, frame.scanlines, frame.pixelate,
     ...c.params.subarray(0, c.compiled.slots.length * 4),
   ]);
-  return { frame, graphCamera, signature };
+  const hudV = get('hud') as HudValue | undefined;
+  const target: Vec3 = graphCamera && c.useGraphCamera ? [...cam!.target] as Vec3 : [...c.orbit.state.target] as Vec3;
+  return { frame, graphCamera, signature, hud: hudV && hudV.kind === 'hud' ? hudV : null, target };
 }

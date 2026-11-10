@@ -319,7 +319,124 @@ function particleStorm(): GraphDoc {
   return b.doc;
 }
 
+function machineHallucination(): GraphDoc {
+  const b = new Builder('Machine Hallucination', 20);
+  // An invisible, breathing form that ~600k particles flow over and paint with light.
+  const t = b.add('time', COL(0), 0, { speed: 0.25 });
+  const noise = b.add('noisefield', COL(1), 0, { scale: 0.7, detail: 3 });
+  const ball = b.add('sphere', COL(0), 200, { radius: 1.6 });
+  const disp = b.add('displace', COL(2), 120, { amount: 0.9 });
+  const tw = b.add('twist', COL(3), 120, { amount: 0.6 });
+  const lfo = b.add('lfo', COL(2), 380, { freq: 0.05, amp: 0.8 });
+  const tor = b.add('torus', COL(0), 420, { major: 2.2, minor: 0.5 });
+  const morph = b.add('morph', COL(4), 200);
+  const m01 = b.add('remap', COL(3), 380, { inMin: -0.8, inMax: 0.8, outMin: 0, outMax: 1 });
+  const parts = b.add('particles', COL(5), 120, {
+    count: 600000, size: 0.004, speed: 0.45, turbulence: 1.3, cling: 0.9, life: 5, spread: 3,
+    intensity: 9, streak: 0.06, trails: 0.8, vortex: 0.25,
+  }, { emitter: 'surface', colorMode: 'spectral' });
+  const dir = b.add('director', COL(5), 560, { distance: 7.5, height: 0.8, shot: 6, shake: 0.12, fov: 38, seed: 5 }, { mode: 'director', cut: 'smooth' });
+  const out = b.add('output', COL(6), 100, {
+    sky: [0, 0, 0], horizon: [0.004, 0.004, 0.008], lightPower: 0, bloom: 0.16, glow: 0, fog: 0, exposure: 0.35,
+    aberration: 0.35, grain: 0.035, vignette: 0.55, letterbox: 0.7,
+  });
+  b.link(t, noise, 'evolve').link(ball, disp, 'shape').link(noise, disp, 'field').link(disp, tw, 'shape').link(lfo, tw, 'amount')
+    .link(tw, morph, 'a').link(tor, morph, 'b').link(lfo, m01, 'value').link(m01, morph, 't')
+    .link(morph, parts, 'shape').link(parts, out, 'particles').link(dir, out, 'camera');
+  b.doc.camera = { yaw: 0.3, pitch: 0.15, dist: 7.5, target: [0, 0, 0] };
+  return b.doc;
+}
+
+function surveillanceState(): GraphDoc {
+  const b = new Builder('Surveillance State', 12);
+  const towerA = b.add('box', COL(0), 0, { size: [0.28, 1.3, 0.28], round: 0.01 });
+  const repA = b.add('repeat', COL(1), 0, { spacing: [1.25, 1, 1.25], count: [6, 0, 6] });
+  const towerB = b.add('box', COL(0), 220, { size: [0.42, 0.7, 0.42], round: 0.01 });
+  const repB = b.add('repeat', COL(1), 220, { spacing: [1.7, 1, 1.7], count: [4, 0, 4] });
+  const xb = b.add('transform', COL(2), 220, { translate: [0.62, -0.6, 0.62] });
+  const city = b.add('union', COL(3), 100, { smooth: 0 });
+  const xa = b.add('transform', COL(2), 0, { translate: [0, -0.2, 0] });
+  const floor = b.add('floor', COL(3), 300, { height: -1.3 });
+  const ground = b.add('union', COL(4), 200, { smooth: 0.05 });
+  const mat = b.add('material', COL(5), 200, { color: [0.05, 0.05, 0.06], roughness: 0.25, metallic: 0.6, grid: 1.6, gridScale: 5, gridColor: [1, 0.08, 0.06] });
+  const label = b.add('text', COL(3), 500, { size: 0.55, depth: 0.08, bevel: 0.01 }, { text: 'SUBJECT 07', font: 'tactical' });
+  const lx = b.add('transform', COL(4), 500, { translate: [0, 2.3, 0] });
+  const lmat = b.add('material', COL(5), 500, { color: [1, 0.1, 0.08], emission: 3 });
+  const scene = b.add('union', COL(6), 300, { smooth: 0 });
+  const hud = b.add('hud', COL(6), 620, { color: [1, 0.12, 0.1], seed: 7 }, { style: 'surveillance', label: 'SUBJECT FLAGGED // SOCIAL SCORE 2.1' });
+  const dir = b.add('director', COL(6), 820, { distance: 7.5, height: 3.2, shot: 3, shake: 0.12, fov: 40, seed: 13 }, { mode: 'director', cut: 'cut' });
+  const out = b.add('output', COL(7), 100, {
+    sky: [0.01, 0.01, 0.012], horizon: [0.12, 0.12, 0.13], light: [1, 0.95, 0.95], lightPower: 2.2, lightYaw: 120, lightPitch: 18,
+    bloom: 0.09, glow: 1.2, fog: 0.9, exposure: 0.2, grain: 0.06, aberration: 0.5, outline: 0.55, scanlines: 0.22, rays: 0.6, vignette: 0.6,
+  }, { look: 'black mirror' });
+  b.link(towerA, repA, 'shape').link(repA, xa, 'shape').link(towerB, repB, 'shape').link(repB, xb, 'shape')
+    .link(xa, city, 'a').link(xb, city, 'b').link(city, ground, 'a').link(floor, ground, 'b').link(ground, mat, 'shape')
+    .link(label, lx, 'shape').link(lx, lmat, 'shape').link(mat, scene, 'a').link(lmat, scene, 'b').link(scene, out, 'shape')
+    .link(hud, out, 'hud').link(dir, out, 'camera');
+  b.doc.camera = { yaw: 0.8, pitch: 0.45, dist: 8, target: [0, 0, 0] };
+  return b.doc;
+}
+
+function thermalRecon(): GraphDoc {
+  const b = new Builder('Thermal Recon', 12);
+  const oct = b.add('octahedron', COL(0), 0, { size: 1.5 });
+  const gyr = b.add('gyroid', COL(0), 200, { scale: 4.5, thickness: 0.07 });
+  const shell = b.add('intersect', COL(1), 100, { smooth: 0.04 });
+  const core = b.add('sphere', COL(1), 320, { radius: 0.55 });
+  const pulse = b.add('pulse', COL(0), 420, { bpm: 70, decay: 3, amp: 9, offset: 3 });
+  const coreMat = b.add('material', COL(2), 320, { color: [1, 0.6, 0.3] });
+  const spin = b.add('time', COL(1), 520, { speed: 18 });
+  const rot = b.add('vec3', COL(2), 520, { x: 25 });
+  const xf = b.add('transform', COL(2), 100, { translate: [0, 0.3, 0] });
+  const shellMat = b.add('material', COL(3), 100, { color: [0.4, 0.4, 0.42], roughness: 0.5, metallic: 0.3 });
+  const both = b.add('union', COL(4), 200, { smooth: 0.02 });
+  const floor = b.add('floor', COL(3), 420, { height: -1.4 });
+  const fmat = b.add('material', COL(4), 420, { color: [0.02, 0.02, 0.02], roughness: 0.9, grid: 0.25, gridScale: 1.5, gridColor: [0.5, 0.5, 0.5] });
+  const scene = b.add('union', COL(5), 260, { smooth: 0 });
+  const parts = b.add('particles', COL(5), 480, { count: 40000, size: 0.006, speed: 1.6, turbulence: 0.4, cling: 0, gravity: 1.5, life: 2.5, spread: 5, intensity: 2, color: [1, 1, 1], color2: [0.5, 0.5, 0.5] }, { emitter: 'rain' });
+  const hud = b.add('hud', COL(5), 700, { color: [1, 1, 1], opacity: 0.8, seed: 3 }, { style: 'drone', label: 'HEAT SIGNATURE' });
+  const dir = b.add('director', COL(6), 520, { distance: 7, height: 2.5, shot: 4, shake: 0.5, fov: 34, seed: 9 }, { mode: 'director', cut: 'whip' });
+  const out = b.add('output', COL(7), 100, {
+    sky: [0.005, 0.005, 0.006], horizon: [0.02, 0.02, 0.025], light: [1, 1, 1], lightPower: 1.6, lightYaw: 40, lightPitch: 50,
+    bloom: 0.12, glow: 2, fog: 0.5, exposure: -0.3, grain: 0.09, scanlines: 0.35, aberration: 0.2, vignette: 0.7,
+  }, { look: 'thermal' });
+  b.link(oct, shell, 'a').link(gyr, shell, 'b').link(shell, xf, 'shape').link(spin, rot, 'y').link(rot, xf, 'rotate').link(xf, shellMat, 'shape')
+    .link(core, coreMat, 'shape').link(pulse, coreMat, 'emission').link(shellMat, both, 'a').link(coreMat, both, 'b')
+    .link(floor, fmat, 'shape').link(both, scene, 'a').link(fmat, scene, 'b').link(scene, out, 'shape')
+    .link(parts, out, 'particles').link(hud, out, 'hud').link(dir, out, 'camera');
+  b.doc.camera = { yaw: 0.6, pitch: 0.3, dist: 7, target: [0, 0, 0] };
+  return b.doc;
+}
+
+function blackOps(): GraphDoc {
+  const b = new Builder('Black Ops Title', 10);
+  const text = b.add('text', COL(0), 0, { size: 1.0, depth: 0.25, bevel: 0.015 }, { text: 'NO SIGNAL', font: 'tactical' });
+  const build = b.add('curve', COL(0), 220, {}, { keys: [{ t: 0, v: 0 }, { t: 0.3, v: 0 }, { t: 2.2, v: 1 }, { t: 10, v: 1 }], interp: 'linear', loop: 'once' });
+  const rev = b.add('reveal', COL(1), 0, { edge: 10, edgeColor: [1, 0.1, 0.05] }, { mode: 'slices' });
+  const mat = b.add('material', COL(2), 0, { color: [0.85, 0.85, 0.88], roughness: 0.35, metallic: 0.9, grid: 0.6, gridScale: 9 });
+  const floor = b.add('floor', COL(2), 300, { height: -0.8 });
+  const fm = b.add('material', COL(3), 300, { color: [0.02, 0.02, 0.02], roughness: 0.15, grid: 0.25, gridScale: 1, gridColor: [1, 0.1, 0.05] });
+  const scene = b.add('union', COL(4), 100, { smooth: 0 });
+  const glitchK = b.add('curve', COL(3), 520, {}, { keys: [{ t: 0, v: 0.9 }, { t: 0.6, v: 0.05 }, { t: 2.2, v: 0.05 }, { t: 2.35, v: 0.9 }, { t: 2.6, v: 0 }, { t: 10, v: 0 }], interp: 'linear', loop: 'once' });
+  const pix = b.add('curve', COL(3), 760, {}, { keys: [{ t: 0, v: 18 }, { t: 0.8, v: 0 }, { t: 10, v: 0 }], interp: 'expo', loop: 'once' });
+  const hud = b.add('hud', COL(4), 520, { seed: 4 }, { style: 'tactical', label: 'SIGNAL INTERCEPTED' });
+  const dir = b.add('director', COL(4), 760, { distance: 5.5, height: 0.4, shot: 2.5, shake: 0.6, fov: 36, arc: 80, seed: 17 }, { mode: 'director', cut: 'whip' });
+  const out = b.add('output', COL(5), 100, {
+    sky: [0, 0, 0], horizon: [0.05, 0.05, 0.055], light: [1, 0.95, 0.9], lightPower: 3, lightYaw: -60, lightPitch: 25,
+    bloom: 0.1, glow: 1.5, fog: 0.6, exposure: 0.1, grain: 0.07, aberration: 0.8, letterbox: 0.9, scanlines: 0.15, rays: 0.4, vignette: 0.6,
+  }, { look: 'bleach' });
+  b.link(text, rev, 'shape').link(build, rev, 'progress').link(rev, mat, 'shape').link(floor, fm, 'shape')
+    .link(mat, scene, 'a').link(fm, scene, 'b').link(scene, out, 'shape')
+    .link(glitchK, out, 'glitch').link(pix, out, 'pixelate').link(hud, out, 'hud').link(dir, out, 'camera');
+  b.doc.camera = { yaw: 0, pitch: 0.1, dist: 5.5, target: [0, 0, 0] };
+  return b.doc;
+}
+
 export const DEMOS: { name: string; build: () => GraphDoc }[] = [
+  { name: 'Machine Hallucination', build: machineHallucination },
+  { name: 'Surveillance State', build: surveillanceState },
+  { name: 'Thermal Recon', build: thermalRecon },
+  { name: 'Black Ops Title', build: blackOps },
   { name: 'Title Sequence', build: titleSequence },
   { name: 'Shot Reel', build: shotReel },
   { name: 'Audio Reactor', build: audioReactor },

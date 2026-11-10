@@ -1,5 +1,5 @@
 /** Value types that flow through sockets. */
-export type SocketType = 'float' | 'vec3' | 'color' | 'sdf' | 'camera' | 'particles';
+export type SocketType = 'float' | 'vec3' | 'color' | 'sdf' | 'camera' | 'particles' | 'hud';
 
 export type Vec3 = [number, number, number];
 
@@ -27,12 +27,29 @@ export interface ParticleValue {
   color: Vec3;
   color2: Vec3;
   gravity: number;
+  colorMode: string;
+  streak: number;
+  trails: number;
+  vortex: number;
+  attract: number;
 }
 
-export type CpuValue = number | Vec3 | CameraValue | ParticleValue;
+/** A heads-up display drawn over the frame (live and in exports). */
+export interface HudValue {
+  kind: 'hud';
+  style: string;
+  opacity: number;
+  color: Vec3;
+  label: string;
+  seed: number;
+}
+
+export type CpuValue = number | Vec3 | CameraValue | ParticleValue | HudValue;
 
 /** Socket types that only connect to themselves and have no literal value. */
-export const OPAQUE_TYPES: SocketType[] = ['sdf', 'camera', 'particles'];
+export const OPAQUE_TYPES: SocketType[] = ['sdf', 'camera', 'particles', 'hud'];
+/** Opaque socket types carried by CPU values (everything except sdf). */
+export const CPU_OBJECT_TYPES: SocketType[] = ['camera', 'particles', 'hud'];
 
 export interface Keyframe {
   t: number;
@@ -89,4 +106,5 @@ export const TYPE_COLORS: Record<SocketType, string> = {
   sdf: '#3cf2c4',
   camera: '#f4f1ff',
   particles: '#ffb347',
+  hud: '#ff3b3b',
 };

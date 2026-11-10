@@ -76,7 +76,7 @@ Bloom, anamorphic flares, chromatic aberration, film grain, depth of field, temp
 - [x] 4 demo scenes that look great out of the box
 
 ### Phase 1: Motion power
-- [x] GPU particles: curl flow, surface cling, collisions, gravity (attractor/vortex forces still to do)
+- [x] GPU particles: curl flow, surface cling, collisions, gravity streaks, trails, sculpt shapes, vortex + attractor
 - [x] Fields and effectors, cloners
 - [x] Audio-reactive nodes
 - [ ] Live per-node thumbnails
@@ -88,6 +88,13 @@ Bloom, anamorphic flares, chromatic aberration, film grain, depth of field, temp
 - [x] Director camera: automatic moves, cuts, shake
 - [x] Glitch, flash, letterbox, hue shift
 - [x] Floating-glass UI with art-reactive colours
+
+### Ops / Anadol update
+- [x] Film looks: black mirror, thermal, night vision, bleach, x-ray
+- [x] God rays, depth outlines, scanlines, pixelate
+- [x] HUD node (tactical, surveillance, drone), baked into exports
+- [x] Invisible particle sculptures, streaks, trails, spectral colour
+- [x] OPS / ANADOL / MONO UI themes, boot sequence
 
 ### Phase 2: The novel ideas
 - [ ] Evolve mode

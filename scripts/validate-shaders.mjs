@@ -11,7 +11,7 @@ await page.goto(url);
 const results = await page.evaluate(async () => {
   const { analyze } = await import('/src/graph/evaluate.ts');
   const { compileGraph } = await import('/src/graph/compile.ts');
-  const { buildSceneShader, buildParticleCompute, BLOOM_DOWN, BLOOM_UP, COMPOSITE, COMBINE, PARTICLE_RENDER } = await import('/src/gpu/shaders.ts');
+  const { buildSceneShader, buildParticleCompute, BLOOM_DOWN, BLOOM_UP, COMPOSITE, COMBINE, PARTICLE_RENDER, FADE } = await import('/src/gpu/shaders.ts');
   const { DEMOS } = await import('/src/demos.ts');
   const { kitchenSink } = await import('/tests/kitchenSink.ts');
   const adapter = await navigator.gpu.requestAdapter();
@@ -27,6 +27,7 @@ const results = await page.evaluate(async () => {
   out.push(await check('bloom-up', BLOOM_UP));
   out.push(await check('composite', COMPOSITE));
   out.push(await check('combine', COMBINE));
+  out.push(await check('fade', FADE));
   out.push(await check('particle-render', PARTICLE_RENDER));
   const docs = [...DEMOS.map((d) => [d.name, d.build()]), ['kitchen-sink', kitchenSink()]];
   for (const [name, doc] of docs) {

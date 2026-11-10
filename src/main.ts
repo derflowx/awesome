@@ -9,6 +9,7 @@ import { TextAtlas } from './gpu/textAtlas';
 import { AudioPlayer } from './audio/player';
 import { exportVideo } from './export/video';
 import { buildFrame } from './engine';
+import { drawHud } from './ui/hud';
 import { NodeEditor } from './editor/NodeEditor';
 import { Timeline } from './ui/timeline';
 import { OrbitCamera, DEFAULT_CAMERA } from './ui/camera';
@@ -310,6 +311,7 @@ function frame(now: number): void {
     paintCamButton();
   }
   const f = built.frame;
+  paintHud(built, t);
 
   // Is the scene still? Then render at full res and accumulate samples.
   const still = sameSig(built.signature, prevSig) && renderer.ready && !(f.particles && timeline.playing);
@@ -371,6 +373,90 @@ function frame(now: number): void {
     (f.particles ? ` \u00b7 ${(f.particles.count / 1000).toFixed(0)}k particles` : '') +
     (useGraphCamera && graphCameraAvailable ? ' \u00b7 \ud83c\udfac director' : '');
   if (renderer.lastError) setStatus(renderer.lastError, 'error');
+}
+
+// ------------------------------------------------------------------ HUD overlay
+const hudCanvas = $<HTMLCanvasElement>('hud-layer');
+const hudCtx = hudCanvas.getContext('2d')!;
+let hudWasDrawn = false;
+function paintHud(built: ReturnType<typeof buildFrame>, t: number): void {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(hudCanvas.clientWidth * dpr), h = Math.round(hudCanvas.clientHeight * dpr);
+  if (hudCanvas.width !== w || hudCanvas.height !== h) {
+    hudCanvas.width = w;
+    hudCanvas.height = h;
+  }
+  if (!built.hud) {
+    if (hudWasDrawn) hudCtx.clearRect(0, 0, w, h);
+    hudWasDrawn = false;
+    return;
+  }
+  hudCtx.clearRect(0, 0, w, h);
+  const f = built.frame;
+  // Draw inside the area between the top bar, timeline and node panel.
+  const top = ($('app').querySelector('.topbar') as HTMLElement).getBoundingClientRect().bottom + 6;
+  const bottom = $('timeline').getBoundingClientRect().top - 6;
+  const panel = $('panel').getBoundingClientRect();
+  const sidePanel = !document.body.classList.contains('maximized') && panel.width > 0 && panel.top < window.innerHeight * 0.3;
+  const right = sidePanel ? panel.left - 6 : hudCanvas.clientWidth;
+  const rw = Math.max(50, right), rh = Math.max(50, bottom - top);
+  // Keep the HUD's optical centre on the render's (lens-shifted) centre.
+  const shift = visibleCenterShift();
+  const cy = hudCanvas.clientHeight / 2 + shift[1];
+  hudCtx.save();
+  hudCtx.translate(0, top * dpr);
+  drawHud(hudCtx, rw * dpr, rh * dpr, built.hud, {
+    t, camPos: f.camPos, fwd: f.fwd, right: f.right, up: f.up, tanHalfFov: f.tanHalfFov, target: built.target,
+    shift: [((hudCanvas.clientWidth / 2 + shift[0]) - rw / 2) * dpr, (cy - top - rh / 2) * dpr],
+    projScale: hudCanvas.clientHeight * dpr,
+  });
+  hudCtx.restore();
+  hudWasDrawn = true;
+}
+
+// ------------------------------------------------------------------ theme
+const THEMES = ['ops', 'anadol', 'mono'];
+const themeBtn = $('btn-theme');
+function setTheme(name: string): void {
+  if (!THEMES.includes(name)) name = 'ops';
+  document.documentElement.dataset.theme = name;
+  themeBtn.textContent = name.toUpperCase();
+  try {
+    localStorage.setItem('fluxion.theme', name);
+  } catch {
+    /* ignore */
+  }
+}
+themeBtn.addEventListener('click', () => {
+  const cur = document.documentElement.dataset.theme ?? 'ops';
+  setTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
+});
+try {
+  setTheme(localStorage.getItem('fluxion.theme') ?? 'ops');
+} catch {
+  setTheme('ops');
+}
+
+// ------------------------------------------------------------------ boot sequence
+function runBoot(): Promise<void> {
+  const boot = $('boot');
+  const quick = new URLSearchParams(location.search).get('present') === '0';
+  const lines = [...boot.querySelectorAll('.boot-line')];
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      boot.classList.add('done');
+      setTimeout(() => boot.remove(), 600);
+      resolve();
+    };
+    boot.addEventListener('click', finish);
+    if (quick) return finish();
+    lines.forEach((l, i) => setTimeout(() => l.classList.add('on'), 120 + i * 170));
+    requestAnimationFrame(() => ((boot.querySelector('.boot-bar i') as HTMLElement).style.width = '100%'));
+    setTimeout(finish, 1500);
+  });
 }
 
 // ------------------------------------------------------------------ art-reactive UI colors
@@ -576,6 +662,7 @@ async function initRenderer(): Promise<void> {
 
 // ------------------------------------------------------------------ boot
 async function boot(): Promise<void> {
+  const booting = runBoot();
   let initial: GraphDoc | null = null;
   const m = location.hash.match(/#g=([\w-]+)/);
   if (m) {
@@ -605,6 +692,7 @@ async function boot(): Promise<void> {
     box.textContent = `${(e as Error).message}\n\nFluxion needs WebGPU: use a recent Chrome, Edge or Arc (desktop), or Safari 26+. The node editor still works.`;
     setStatus('no WebGPU', 'error');
   }
+  await booting;
   requestAnimationFrame(frame);
 }
 

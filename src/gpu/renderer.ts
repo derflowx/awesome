@@ -1,5 +1,5 @@
 import {
-  BLOOM_DOWN, BLOOM_UP, COMBINE, COMPOSITE, HEADER_VEC4S, PARTICLE_RENDER,
+  BLOOM_DOWN, BLOOM_UP, COMBINE, COMPOSITE, FADE, HEADER_VEC4S, PARTICLE_RENDER,
   buildParticleCompute, buildSceneShader,
 } from './shaders';
 import { MAX_SLOTS } from '../graph/compile';
@@ -35,6 +35,11 @@ export interface FrameInputs {
   /** Simulation step for particles this frame (0 = frozen). */
   particleDt: number;
   particleReset: boolean;
+  look: number;
+  rays: number;
+  outline: number;
+  scanlines: number;
+  pixelate: number;
   /** Pixel offset of the optical centre (keeps the subject centred beside floating panels). */
   lensShift?: [number, number];
 }
@@ -63,6 +68,7 @@ function halton(i: number, b: number): number {
 }
 
 const EMITTERS = ['surface', 'sphere', 'ring', 'burst', 'rain'];
+const COLOR_MODES = ['life', 'speed', 'surface', 'spectral'];
 
 function f16ToF32(h: number): number {
   const s = h & 0x8000 ? -1 : 1;
@@ -91,11 +97,15 @@ export class Renderer {
   private uniformData = new Float32Array((HEADER_VEC4S + MAX_SLOTS) * 4);
   private atlas: GPUTexture;
   private accum: GPUTexture[] = [];
-  private fx!: GPUTexture;
+  private fx: GPUTexture[] = [];
+  private fxCur = 0;
+  private fadePipeline: GPURenderPipeline;
+  private fadeUBO: GPUBuffer;
+  private fadeBG: GPUBindGroup[] = [];
   private combined!: GPUTexture;
   private bloom: GPUTexture[] = [];
   private sceneBG: GPUBindGroup[] = [];
-  private combineBG: GPUBindGroup[] = [];
+  private combineBG: GPUBindGroup[][] = []; // [accum][fx]
   private downBG: GPUBindGroup[] = [];
   private upBG: GPUBindGroup[] = [];
   private compositeBG!: GPUBindGroup;
@@ -146,8 +156,8 @@ export class Renderer {
 
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
     this.sceneUBO = device.createBuffer({ size: this.uniformData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.postUBO = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.pUBO = device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.postUBO = device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.pUBO = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.atlas = device.createTexture({
       size: [ATLAS_SIZE, ATLAS_SIZE], format: 'r8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
@@ -192,6 +202,13 @@ export class Renderer {
     const up = device.createShaderModule({ code: BLOOM_UP, label: 'bloom-up' });
     const comp = device.createShaderModule({ code: COMPOSITE, label: 'composite' });
     const comb = device.createShaderModule({ code: COMBINE, label: 'combine' });
+    const fade = device.createShaderModule({ code: FADE, label: 'fade' });
+    this.fadeUBO = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.fadePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: fade, entryPoint: 'vsFull' },
+      fragment: { module: fade, entryPoint: 'fsFade', targets: [{ format: HDR }] },
+    });
     this.downPipeline = device.createRenderPipeline({
       layout: 'auto',
       vertex: { module: down, entryPoint: 'vsFull' },
@@ -274,7 +291,7 @@ export class Renderer {
     if (this.pBuffer && count <= this.pCount) return;
     this.pBuffer?.destroy();
     const cap = Math.min(MAX_PARTICLES, Math.max(1024, Math.ceil(count / 65536) * 65536));
-    this.pBuffer = this.device.createBuffer({ size: cap * 32, usage: GPUBufferUsage.STORAGE });
+    this.pBuffer = this.device.createBuffer({ size: cap * 48, usage: GPUBufferUsage.STORAGE });
     this.pCount = cap;
     this.pcBG = this.device.createBindGroup({
       layout: this.pcBGL,
@@ -294,11 +311,11 @@ export class Renderer {
     this.w = w;
     this.h = h;
     for (const t of [...this.accum, ...this.bloom]) t.destroy();
-    this.fx?.destroy();
+    for (const t of this.fx) t.destroy();
     this.combined?.destroy();
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
     this.accum = [0, 1].map(() => this.device.createTexture({ size: [w, h], format: HDR, usage }));
-    this.fx = this.device.createTexture({ size: [w, h], format: HDR, usage });
+    this.fx = [0, 1].map(() => this.device.createTexture({ size: [w, h], format: HDR, usage }));
     this.combined = this.device.createTexture({ size: [w, h], format: HDR, usage });
     this.bloom = [];
     let bw = w, bh = h;
@@ -322,11 +339,22 @@ export class Renderer {
       }),
     );
     this.combineBG = [0, 1].map((a) =>
+      [0, 1].map((x) =>
+        d.createBindGroup({
+          layout: this.combinePipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: this.accum[a].createView() },
+            { binding: 1, resource: this.fx[x].createView() },
+          ],
+        }),
+      ),
+    );
+    this.fadeBG = [0, 1].map((x) =>
       d.createBindGroup({
-        layout: this.combinePipeline.getBindGroupLayout(0),
+        layout: this.fadePipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: this.accum[a].createView() },
-          { binding: 1, resource: this.fx.createView() },
+          { binding: 0, resource: this.fx[x].createView() },
+          { binding: 1, resource: { buffer: this.fadeUBO } },
         ],
       }),
     );
@@ -379,6 +407,7 @@ export class Renderer {
     set(10, jx, jy, f.sampleIndex, f.steps);
     u.set(f.params.subarray(0, MAX_SLOTS * 4), HEADER_VEC4S * 4);
     const q = this.device.queue;
+    const sun = this.sunUV(f);
     q.writeBuffer(this.sceneUBO, 0, u);
     q.writeBuffer(
       this.postUBO,
@@ -387,6 +416,8 @@ export class Renderer {
         f.exposure, f.bloom, f.vignette, f.grain,
         f.aberration, f.time, this.bloom.length, 0,
         f.flash, f.glitch, f.letterbox, f.hue,
+        sun[0], sun[1], f.rays, f.look,
+        f.outline, f.scanlines, f.pixelate, sun[2],
       ]),
     );
 
@@ -401,9 +432,22 @@ export class Renderer {
     p.draw(3);
     p.end();
 
-    // ---- particles: simulate (compute) then splat additively into fx
+    // ---- particles: simulate (compute) then splat additively into fx (with optional fading trails)
     const ps = f.particles;
-    const fxPass = enc.beginRenderPass({ colorAttachments: [{ view: this.fx.createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
+    const fxi = 1 - this.fxCur;
+    this.fxCur = fxi;
+    const fxView = this.fx[fxi].createView();
+    const trails = ps && ps.count > 0 && !f.particleReset ? ps.trails : 0;
+    if (trails > 0) {
+      q.writeBuffer(this.fadeUBO, 0, new Float32Array([trails, 0, 0, 0]));
+      const fp = pass(fxView);
+      fp.setPipeline(this.fadePipeline);
+      fp.setBindGroup(0, this.fadeBG[1 - fxi]);
+      fp.draw(3);
+      fp.end();
+    } else {
+      pass(fxView).end();
+    }
     if (ps && ps.count > 0) {
       const count = Math.min(MAX_PARTICLES, Math.max(1, ps.count));
       this.ensureParticles(count);
@@ -421,9 +465,10 @@ export class Renderer {
             ps.life, ps.spread, Math.max(0, EMITTERS.indexOf(ps.emitter)), ps.intensity,
             ...ps.color, ps.gravity,
             ...ps.color2, reset ? 1 : 0,
+            ps.streak, ps.trails, ps.vortex, ps.attract,
+            Math.max(0, COLOR_MODES.indexOf(ps.colorMode)), 0, 0, 0,
           ]),
         );
-        fxPass.end();
         const cp = enc.beginComputePass();
         cp.setPipeline(this.pcPipeline);
         cp.setBindGroup(0, this.sceneBG[a]);
@@ -440,18 +485,18 @@ export class Renderer {
             ],
           });
         }
-        const rp = pass(this.fx.createView(), 'load');
+        const rp = pass(fxView, 'load');
         rp.setPipeline(this.prPipeline);
         rp.setBindGroup(0, this.sceneBG[a]);
         rp.setBindGroup(1, this.prBG[a]);
         rp.draw(6, count);
         rp.end();
-      } else fxPass.end();
-    } else fxPass.end();
+      }
+    }
 
     p = pass(this.combined.createView());
     p.setPipeline(this.combinePipeline);
-    p.setBindGroup(0, this.combineBG[a]);
+    p.setBindGroup(0, this.combineBG[a][fxi]);
     p.draw(3);
     p.end();
 
@@ -480,6 +525,18 @@ export class Renderer {
 
     q.submit([enc.finish()]);
     this.cur = 1 - a;
+  }
+
+  /** Screen position of the sun for god rays: [u, v, visible]. */
+  private sunUV(f: FrameInputs): [number, number, number] {
+    const d = f.sunDir;
+    const z = d[0] * f.fwd[0] + d[1] * f.fwd[1] + d[2] * f.fwd[2];
+    if (z <= 0.02) return [0.5, 0.5, 0];
+    const aspect = this.w / this.h;
+    const x = (d[0] * f.right[0] + d[1] * f.right[1] + d[2] * f.right[2]) / (z * f.tanHalfFov * aspect);
+    const y = (d[0] * f.up[0] + d[1] * f.up[1] + d[2] * f.up[2]) / (z * f.tanHalfFov);
+    const sx = (f.lensShift?.[0] ?? 0) / this.w, sy = (f.lensShift?.[1] ?? 0) / this.h;
+    return [x * 0.5 + 0.5 + sx, 0.5 - y * 0.5 + sy, 1];
   }
 
   get size(): [number, number] {

@@ -1,6 +1,6 @@
 import { getDef } from './registry';
 import { topoOrder } from './graph';
-import type { CpuValue, GraphDoc, GraphNode, Link, Vec3 } from './types';
+import { CPU_OBJECT_TYPES, type CpuValue, type GraphDoc, type GraphNode, type Link, type Vec3 } from './types';
 
 export type NodeDomain = 'cpu' | 'gpu';
 
@@ -103,7 +103,7 @@ export class Evaluator {
       const inputs: Record<string, CpuValue> = {};
       for (const inp of def.inputs) {
         if (inp.type === 'sdf') continue;
-        if (inp.type === 'camera' || inp.type === 'particles') {
+        if (CPU_OBJECT_TYPES.includes(inp.type)) {
           const l = an.linkInto.get(key(node.id, inp.name));
           const v = l ? this.values.get(l.from) : undefined;
           if (v !== undefined) inputs[inp.name] = v;
@@ -132,7 +132,7 @@ export function readInput(doc: GraphDoc, an: Analysis, values: Map<number, CpuVa
   let v: CpuValue | undefined;
   if (link && !an.invalidLinks.has(link.id) && an.domain.get(link.from) === 'cpu') v = values.get(link.from);
   void doc;
-  if (inp.type === 'camera' || inp.type === 'particles') return v as CpuValue;
+  if (CPU_OBJECT_TYPES.includes(inp.type)) return v as CpuValue;
   if (v === undefined) v = node.values[name] ?? inp.default ?? 0;
   return inp.type === 'float' ? asFloat(v) : asVec3(v);
 }

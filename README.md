@@ -6,7 +6,9 @@ You wire nodes together and the graph is compiled live into one GPU shader. Ever
 
 ![status](https://img.shields.io/badge/phase-0-3cf2c4)
 
-![New demos: Title Sequence, Shot Reel, Audio Reactor, Type Lab, Particle Storm](docs/demos-v2.png)
+![Machine Hallucination, Surveillance State, Thermal Recon, Black Ops Title](docs/demos-v3.png)
+
+![Title Sequence, Shot Reel, Audio Reactor, Type Lab, Particle Storm](docs/demos-v2.png)
 
 ![Phase 0 demos: Liquid Chrome, Neon Fractal, Gyroid Heart, Kinetic Ring](docs/demos.png)
 
@@ -31,6 +33,17 @@ Open the printed URL in **Chrome, Edge or Arc (desktop)**, or **Safari 26+**. We
 Slow GPU? Add `?scale=0.5` to the URL to cap the render resolution.
 
 ## Features
+
+### Ops / Anadol update
+| Area | Features |
+|---|---|
+| **Film looks** | Output `look`: cinematic, black mirror (cold mono + red signal), thermal (ironbow), night vision, bleach bypass, x-ray |
+| **Lens** | God rays (screen-space, sky-masked), depth outlines (wireframe at > 1), CRT scanlines, pixelate |
+| **HUD node** | Tactical (compass tape, pitch ladder, reticle, target lock, telemetry), surveillance (tracked IDs, confidence, CAM timestamp), drone (horizon, altitude ladder, coordinates), minimal. Drawn live and baked into exports |
+| **Particle sculptures** | Particles take an optional `sculpt` shape that stays invisible: pure data sculptures. Velocity streaks, persistent light trails, colour by life / speed / surface / spectral, vortex and attractor forces |
+| **Scan grid** | Material `scan grid`: glowing tactical wire grid with a sweeping scan band |
+| **Fonts** | + Black Ops One, Michroma, Share Tech Mono |
+| **UI** | OPS theme: hairline instrument panels, monospace, red signal accent, corner ticks, timecode, boot sequence. Switch to ANADOL (colour sampled from the render) or MONO |
 
 ### Motion design (Phase 1)
 | Area | Features |

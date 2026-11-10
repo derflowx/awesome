@@ -346,6 +346,8 @@ struct Post {
   a: vec4f, // exposure (stops), bloom, vignette, grain
   b: vec4f, // aberration, time, bloomLevels, unused
   c: vec4f, // flash, glitch, letterbox, hue shift
+  d: vec4f, // sun uv, rays, look
+  e: vec4f, // outline, scanlines, pixelate, sun visible
 };
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloomTex: texture_2d<f32>;
@@ -382,8 +384,38 @@ fn hash12(p: vec2f) -> f32 {
   return fract((p3.x + p3.y) * p3.z);
 }
 
+fn ironbow(t: f32) -> vec3f {
+  let x = clamp(t, 0.0, 1.0);
+  return clamp(vec3f(
+    smoothstep(0.15, 0.55, x) + smoothstep(0.85, 1.0, x) * 0.2,
+    smoothstep(0.45, 0.9, x),
+    smoothstep(0.0, 0.25, x) * (1.0 - smoothstep(0.3, 0.55, x)) * 0.7 + smoothstep(0.85, 1.0, x)), vec3f(0.0), vec3f(1.0));
+}
+
+fn grade(c: vec3f, look: i32, uv: vec2f, t: f32) -> vec3f {
+  let l = dot(c, vec3f(0.2126, 0.7152, 0.0722));
+  if (look == 1) { // black mirror: cold monochrome, red signal in the highlights
+    let m = vec3f(pow(l, 1.25)) * vec3f(0.92, 0.96, 1.0);
+    return mix(m, vec3f(1.0, 0.07, 0.05) * (0.4 + l), smoothstep(0.6, 0.95, l) * 0.85);
+  }
+  if (look == 2) { return ironbow(pow(l, 0.8)); } // thermal
+  if (look == 3) { // night vision
+    let n = hash12(uv * 931.0 + t * 37.0) * 0.18;
+    return vec3f(0.12, 1.0, 0.3) * pow(clamp(l * 1.5 + n, 0.0, 1.0), 0.85);
+  }
+  if (look == 4) { // bleach bypass: crushed, cold, desaturated
+    var b = mix(vec3f(l), c, 0.32);
+    b = clamp((b - 0.5) * 1.3 + 0.48, vec3f(0.0), vec3f(1.0));
+    return b * vec3f(0.9, 1.0, 1.06);
+  }
+  if (look == 5) { return vec3f(1.0 - l) * vec3f(0.72, 0.93, 1.0); } // x-ray
+  return c;
+}
+
 @fragment fn fsComposite(v: VOut) -> @location(0) vec4f {
   var uv = v.uv;
+  let resF = vec2f(textureDimensions(hdr));
+  if (P.e.z > 1.0) { uv = (floor(uv * resF / P.e.z) + 0.5) * P.e.z / resF; }
   let gl = P.c.y;
   var glitchShift = 0.0;
   if (gl > 0.0) {
@@ -404,17 +436,50 @@ fn hash12(p: vec2f) -> f32 {
     textureSampleLevel(hdr, samp, uv + ab, 0.0).b);
   let bl = textureSampleLevel(bloomTex, samp, uv, 0.0).rgb / max(P.b.z, 1.0);
   col = mix(col, bl, clamp(P.a.y, 0.0, 1.0));
+  // Screen-space god rays from the sun, masked to sky pixels (alpha = hit distance).
+  if (P.d.z > 0.0 && P.e.w > 0.5) {
+    var acc = vec3f(0.0);
+    var wgt = 1.0;
+    let delta = (uv - P.d.xy) / 48.0 * 0.95;
+    var suv = uv;
+    for (var i = 0; i < 48; i++) {
+      suv -= delta;
+      let sm = textureSampleLevel(hdr, samp, suv, 0.0);
+      acc += sm.rgb * step(500.0, sm.a) * wgt;
+      wgt *= 0.965;
+    }
+    col += acc / 48.0 * P.d.z;
+  }
   col *= exp2(P.a.x);
   col += vec3f(P.c.x) * (1.0 + bl * 2.0);
   if (P.c.w != 0.0) { col = max(hueRotate(col, P.c.w * 6.2831853), vec3f(0.0)); }
   col = agx(col);
   let lum = dot(col, vec3f(0.2126, 0.7152, 0.0722));
   col = mix(vec3f(lum), col, 1.15);
+  // Depth outlines: tactical wireframe edges.
+  if (P.e.x > 0.0) {
+    let pc = vec2i(uv * resF);
+    let dc = textureLoad(hdr, pc, 0).a;
+    let dl = textureLoad(hdr, pc + vec2i(-1, 0), 0).a;
+    let dr = textureLoad(hdr, pc + vec2i(1, 0), 0).a;
+    let du = textureLoad(hdr, pc + vec2i(0, -1), 0).a;
+    let dd = textureLoad(hdr, pc + vec2i(0, 1), 0).a;
+    let lap = abs(dl + dr + du + dd - 4.0 * dc) / max(min(dc, 200.0), 0.05);
+    let edge = smoothstep(0.02, 0.12, lap);
+    col *= mix(1.0, 0.12, clamp(P.e.x - 1.0, 0.0, 1.0));
+    col = mix(col, vec3f(1.0), edge * min(P.e.x, 1.0));
+  }
+  col = grade(col, i32(P.d.w), uv, P.b.y);
   col *= clamp(1.0 - P.a.z * dot(c, c) * 2.4, 0.0, 1.0);
   let res = vec2f(textureDimensions(hdr));
   let g = hash12(uv * res + fract(P.b.y * 7.13) * 911.0) - 0.5;
   col += g * P.a.w;
   if (gl > 0.0) { col *= 0.9 + 0.1 * sin(v.uv.y * res.y * 1.5); }
+  if (P.e.y > 0.0) {
+    // CRT: line mask plus a slow rolling bar.
+    col *= 1.0 - P.e.y * 0.45 * (0.5 + 0.5 * sin(v.uv.y * res.y * 3.14159));
+    col += P.e.y * 0.05 * smoothstep(0.0, 0.08, 0.08 - abs(fract(v.uv.y - P.b.y * 0.12) - 0.5));
+  }
   // Cinematic bars (2.39:1 at full strength).
   let aspect = res.x / res.y;
   let barH = clamp(0.5 - aspect / (2.0 * 2.39), 0.0, 0.5) * P.c.z;
@@ -429,13 +494,15 @@ export function buildSceneShader(generated: string): string {
 
 // ---------------------------------------------------------------- particles
 const PARTICLE_COMMON = /* wgsl */ `
-struct Particle { pos: vec4f, vel: vec4f }; // pos.w = age, vel.w = lifetime
+struct Particle { pos: vec4f, vel: vec4f, col: vec4f }; // pos.w = age, vel.w = lifetime, col = rgb + speed
 struct PU {
   a: vec4f, // count, dt, time, seed
   b: vec4f, // size, speed, turbulence, cling
   c: vec4f, // life, spread, emitter, intensity
   d: vec4f, // color rgb, gravity
   e: vec4f, // color2 rgb, reset
+  f: vec4f, // streak, trails, vortex, attract
+  g: vec4f, // colorMode, unused...
 };
 `;
 
@@ -444,6 +511,7 @@ ${PARTICLE_COMMON}
 @group(1) @binding(0) var<storage, read_write> parts: array<Particle>;
 @group(1) @binding(1) var<uniform> PP: PU;
 
+fn pD(p: vec3f) -> f32 { return particleMap(p).d; }
 fn rnd(i: u32, s: u32) -> vec3f {
   let h = pcg3(vec3u(i, s, i ^ (s * 747796405u)));
   return vec3f(h) / 4294967295.0;
@@ -451,8 +519,8 @@ fn rnd(i: u32, s: u32) -> vec3f {
 fn sdfGrad(p: vec3f) -> vec3f {
   let e = 0.002;
   let k = vec2f(1.0, -1.0);
-  return normalize(k.xyy * mapD(p + k.xyy * e) + k.yyx * mapD(p + k.yyx * e) +
-                   k.yxy * mapD(p + k.yxy * e) + k.xxx * mapD(p + k.xxx * e) + vec3f(1e-7));
+  return normalize(k.xyy * pD(p + k.xyy * e) + k.yyx * pD(p + k.yyx * e) +
+                   k.yxy * pD(p + k.yxy * e) + k.xxx * pD(p + k.xxx * e) + vec3f(1e-7));
 }
 fn potential(p: vec3f) -> vec3f {
   return vec3f(gnoise(p), gnoise(p + vec3f(31.4, 12.7, 5.3)), gnoise(p + vec3f(-7.1, 44.2, 19.9)));
@@ -479,7 +547,7 @@ fn spawn(i: u32, salt: u32) -> Particle {
   if (em == 0) {
     pos = (r * 2.0 - 1.0) * spread;
     for (var k = 0; k < 8; k++) {
-      let d = mapD(pos);
+      let d = pD(pos);
       pos -= sdfGrad(pos) * d;
     }
   } else if (em == 2) {
@@ -492,7 +560,24 @@ fn spawn(i: u32, salt: u32) -> Particle {
     pos = vec3f((r.x * 2.0 - 1.0) * spread, spread, (r.z * 2.0 - 1.0) * spread);
     vel = vec3f(0.0, -PP.b.y, 0.0);
   }
-  return Particle(vec4f(pos, 0.0), vec4f(vel, PP.c.x * (0.5 + r.z)));
+  return Particle(vec4f(pos, 0.0), vec4f(vel, PP.c.x * (0.5 + r.z)), vec4f(PP.d.rgb, 0.0));
+}
+
+fn shadeParticle(pt: Particle, sd: Sd) -> vec4f {
+  let u = clamp(pt.pos.w / max(pt.vel.w, 1e-3), 0.0, 1.0);
+  let spd = length(pt.vel.xyz);
+  let mode = i32(PP.g.x);
+  var c = mix(PP.d.rgb, PP.e.rgb, u);
+  if (mode == 1) {
+    c = mix(PP.d.rgb, PP.e.rgb, clamp(spd / max(PP.b.y * 2.0, 1e-3), 0.0, 1.0));
+  } else if (mode == 2) {
+    c = max(sd.col, vec3f(0.0)) * (1.0 + sd.mat.z * 0.5);
+  } else if (mode == 3) {
+    let k = dot(pt.pos.xyz, vec3f(0.11, 0.17, 0.07)) + spd * 0.25 + PP.a.z * 0.03 + u * 0.3;
+    c = 0.5 + 0.5 * cos(6.2831853 * (vec3f(k) + vec3f(0.0, 0.33, 0.67)));
+    c = c * c * 1.4;
+  }
+  return vec4f(c, spd);
 }
 
 @compute @workgroup_size(256)
@@ -506,6 +591,7 @@ fn csParticles(@builtin(global_invocation_id) gid: vec3u) {
     pt = spawn(i, u32(PP.a.w));
     let r = rnd(i, 999u);
     if (em != 3) { pt.pos.w = -r.x * pt.vel.w; }
+    pt.col = shadeParticle(pt, particleMap(pt.pos.xyz));
     parts[i] = pt;
     return;
   }
@@ -516,32 +602,36 @@ fn csParticles(@builtin(global_invocation_id) gid: vec3u) {
     let born = pt.pos.w - pt.vel.w;
     pt = spawn(i, u32(PP.a.w) + u32(PP.a.z * 37.0) + i % 7u);
     pt.pos.w = born;
+    pt.col = shadeParticle(pt, particleMap(pt.pos.xyz));
     parts[i] = pt;
     return;
   }
   var p = pt.pos.xyz;
   var v = pt.vel.xyz;
-  let flow = curlNoise(p * 0.55 + vec3f(0.0, PP.a.z * 0.07, 0.0)) * PP.b.z * PP.b.y;
+  var flow = curlNoise(p * 0.55 + vec3f(0.0, PP.a.z * 0.07, 0.0)) * PP.b.z * PP.b.y;
+  // Vortex around the vertical axis and a soft attractor to the origin.
+  let rxz = vec2f(p.x, p.z);
+  flow += vec3f(-rxz.y, 0.0, rxz.x) / max(length(rxz), 0.2) * PP.f.z;
+  flow -= p / max(length(p), 0.2) * PP.f.w;
   v = mix(v, flow, 1.0 - exp(-dt * 1.8));
   v.y -= PP.d.w * dt;
   let cl = PP.b.w;
-  if (cl > 0.0) {
-    let d = mapD(p);
-    if (abs(d) < 2.5) {
-      let n = sdfGrad(p);
-      v -= n * dot(v, n) * cl;
-      p -= n * d * min(1.0, cl * dt * 10.0);
-    }
+  var sd = particleMap(p);
+  if (cl > 0.0 && abs(sd.d) < 2.5) {
+    let n = sdfGrad(p);
+    v -= n * dot(v, n) * cl;
+    p -= n * sd.d * min(1.0, cl * dt * 10.0);
   }
   p += v * dt;
-  let d2 = mapD(p);
-  if (d2 < 0.0) {
+  sd = particleMap(p);
+  if (sd.d < 0.0) {
     let n = sdfGrad(p);
-    p -= n * d2;
+    p -= n * sd.d;
     v = reflect(v, n) * 0.4;
   }
   pt.pos = vec4f(p, pt.pos.w);
   pt.vel = vec4f(v, pt.vel.w);
+  pt.col = shadeParticle(pt, sd);
   parts[i] = pt;
 }
 `;
@@ -558,7 +648,18 @@ struct PVOut {
   @location(0) uv: vec2f,
   @location(1) col: vec3f,
   @location(2) depth: f32,
+  @location(3) segLen: f32,
 };
+
+fn project(w: vec3f) -> vec3f {
+  let rel = w - U.camPos.xyz;
+  let z = dot(rel, U.camFwd.xyz);
+  let th = U.camPos.w;
+  let aspect = U.res.x / U.res.y;
+  let xy = vec2f(dot(rel, U.camRight.xyz) / (z * th * aspect), dot(rel, U.camUp.xyz) / (z * th))
+         + vec2f(2.0 * U.camRight.w / U.res.x, -2.0 * U.camUp.w / U.res.y);
+  return vec3f(xy, z);
+}
 
 @vertex fn vsPart(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PVOut {
   var o: PVOut;
@@ -567,37 +668,66 @@ struct PVOut {
   let age = pt.pos.w;
   let life = pt.vel.w;
   if (age < 0.0 || age > life) { return o; }
-  let rel = pt.pos.xyz - U.camPos.xyz;
-  let z = dot(rel, U.camFwd.xyz);
-  if (z < 0.05) { return o; }
-  let x = dot(rel, U.camRight.xyz);
-  let y = dot(rel, U.camUp.xyz);
-  let th = U.camPos.w;
+  let a = project(pt.pos.xyz);
+  if (a.z < 0.05) { return o; }
   let aspect = U.res.x / U.res.y;
-  let center = vec2f(x / (z * th * aspect), y / (z * th)) + vec2f(2.0 * U.camRight.w / U.res.x, -2.0 * U.camUp.w / U.res.y);
-  let sizeNdc = PP.b.x / (z * th);
-  let minNdc = 3.0 / U.res.y;
-  let s = max(sizeNdc, minNdc);
-  let energy = (sizeNdc * sizeNdc) / (s * s);
+  let asp = vec2f(aspect, 1.0);
+  let sizeNdc = PP.b.x / (a.z * U.camPos.w);
+  let s = max(sizeNdc, 1.6 / U.res.y);
+  var energy = (sizeNdc * sizeNdc) / (s * s);
+
+  // Streak: stretch the sprite along its screen-space motion (aspect-corrected space).
+  var axis = vec2f(0.0, 1.0);
+  var len = 0.0;
+  if (PP.f.x > 0.0) {
+    let b = project(pt.pos.xyz - pt.vel.xyz * PP.f.x);
+    if (b.z > 0.05) {
+      let d = (a.xy - b.xy) * asp;
+      len = min(length(d) * 0.5, 0.5);
+      if (len > 1e-5) { axis = normalize(d); }
+    }
+  }
+  let side = vec2f(-axis.y, axis.x);
   var corners = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0));
   let cn = corners[vi];
-  o.pos = vec4f(center + cn * vec2f(s / aspect, s), 0.5, 1.0);
-  o.uv = cn;
+  let center = a.xy - axis * len / asp;
+  let offs = (axis * cn.y * (s + len) + side * cn.x * s) / asp;
+  o.pos = vec4f(center + offs, 0.5, 1.0);
+  o.uv = vec2f(cn.x, cn.y * (s + len) / s);
+  o.segLen = len / s;
+  energy = energy * s / (s + len);
   let u = age / life;
   let fade = smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.55, 1.0, u));
-  o.col = mix(PP.d.rgb, PP.e.rgb, u) * PP.c.w * fade * max(energy, 0.05);
-  o.depth = length(rel);
+  o.col = pt.col.rgb * PP.c.w * fade * max(energy, 0.08) * mix(1.0, 1.0 - PP.f.y, 0.75);
+  o.depth = length(pt.pos.xyz - U.camPos.xyz);
   return o;
 }
 
 @fragment fn fsPart(v: PVOut) -> @location(0) vec4f {
-  let r2 = dot(v.uv, v.uv);
+  // Capsule falloff: round across, flat along the streak.
+  let dy = max(abs(v.uv.y) - v.segLen, 0.0);
+  let r2 = v.uv.x * v.uv.x + dy * dy;
   if (r2 > 1.0) { discard; }
   let sceneT = textureLoad(depthTex, vec2i(v.pos.xy), 0).a;
   let occl = 1.0 - smoothstep(sceneT - 0.02, sceneT + 0.05, v.depth);
   if (occl <= 0.0) { discard; }
-  let f = exp(-r2 * 3.5) * occl;
-  return vec4f(v.col * f, 1.0);
+  return vec4f(v.col * exp(-r2 * 3.5) * occl, 1.0);
+}
+`;
+
+export const FADE = /* wgsl */ `
+@group(0) @binding(0) var prevFx: texture_2d<f32>;
+struct FU { k: vec4f };
+@group(0) @binding(1) var<uniform> F: FU;
+struct VOut { @builtin(position) pos: vec4f };
+@vertex fn vsFull(@builtin(vertex_index) i: u32) -> VOut {
+  let q = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  var o: VOut;
+  o.pos = vec4f(q * 2.0 - 1.0, 0.0, 1.0);
+  return o;
+}
+@fragment fn fsFade(v: VOut) -> @location(0) vec4f {
+  return vec4f(textureLoad(prevFx, vec2i(v.pos.xy), 0).rgb * F.k.x, 1.0);
 }
 `;
 

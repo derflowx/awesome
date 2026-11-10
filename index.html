@@ -6,18 +6,32 @@
     <title>Fluxion</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Instrument+Serif:ital@1&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&family=Pacifico&family=Space+Grotesk:wght@700&family=Unbounded:wght@500;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Black+Ops+One&family=Michroma&family=Share+Tech+Mono&family=Instrument+Serif:ital@1&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&family=Pacifico&family=Space+Grotesk:wght@700&family=Unbounded:wght@500;800&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="app">
       <section class="viewport" id="viewport">
         <canvas id="view"></canvas>
+        <canvas id="hud-layer"></canvas>
         <div class="viewport-error" id="gpu-error" hidden></div>
         <div class="drop-hint">Drop audio to make it react &middot; drop a .flux.json to open</div>
       </section>
 
-      <header class="topbar glass">
-        <div class="brand"><span class="logo"></span><span class="wordmark">FLUXION</span></div>
+      <div id="boot">
+        <div class="boot-inner">
+          <div class="boot-title">FLUX<b>/</b>ON</div>
+          <div class="boot-line">REALTIME SIGNAL ENGINE  //  BUILD 2.0</div>
+          <div class="boot-line"><span class="ok">[ OK ]</span> GPU ADAPTER .............. <span id="boot-gpu">WEBGPU</span></div>
+          <div class="boot-line"><span class="ok">[ OK ]</span> SDF COMPILER ............. ONLINE</div>
+          <div class="boot-line"><span class="ok">[ OK ]</span> PARTICLE FIELD ........... 1,000,000</div>
+          <div class="boot-line"><span class="ok">[ OK ]</span> DIRECTOR ................. ARMED</div>
+          <div class="boot-line"><span class="ok">[ OK ]</span> SIGNAL CHAIN ............. LIVE</div>
+          <div class="boot-bar"><i></i></div>
+        </div>
+      </div>
+
+      <header class="topbar glass ticks">
+        <div class="brand"><span class="logo"></span><span class="wordmark">FLUX<b>/</b>ON</span></div>
         <select id="demo" title="Load a demo scene"></select>
         <div class="tb-group">
           <button id="btn-new" title="New scene">New</button>
@@ -37,13 +51,14 @@
         <div class="spacer"></div>
         <div id="status" class="status"></div>
         <div class="tb-group">
+          <button id="btn-theme" title="Interface theme">OPS</button>
           <button id="btn-snap" title="Save a PNG">PNG</button>
           <button id="btn-max" title="Hide panels (`)">Focus</button>
         </div>
         <button id="btn-export" class="cta" title="Render an MP4 with motion blur">Export&nbsp;MP4</button>
       </header>
 
-      <aside class="panel glass" id="panel">
+      <aside class="panel glass ticks" id="panel">
         <div class="panel-grip" id="splitter" title="Drag to resize"></div>
         <section class="editor" id="editor"></section>
       </aside>
