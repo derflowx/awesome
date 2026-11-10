@@ -1,10 +1,14 @@
 import './style.css';
 import { Graph, type ChangeKind } from './graph/graph';
 import { History } from './graph/history';
-import { analyze, asFloat, asVec3, Evaluator, readInput, type Analysis } from './graph/evaluate';
-import { compileGraph, fillSlots, MAX_SLOTS, type CompileResult } from './graph/compile';
+import { analyze, Evaluator, type Analysis } from './graph/evaluate';
+import { compileGraph, MAX_SLOTS, type CompileResult } from './graph/compile';
 import type { GraphDoc, Vec3 } from './graph/types';
-import { Renderer, type FrameInputs } from './gpu/renderer';
+import { Renderer } from './gpu/renderer';
+import { TextAtlas } from './gpu/textAtlas';
+import { AudioPlayer } from './audio/player';
+import { exportVideo } from './export/video';
+import { buildFrame } from './engine';
 import { NodeEditor } from './editor/NodeEditor';
 import { Timeline } from './ui/timeline';
 import { OrbitCamera, DEFAULT_CAMERA } from './ui/camera';
@@ -20,11 +24,12 @@ const evaluator = new Evaluator();
 const camera = new OrbitCamera();
 const editor = new NodeEditor($('editor'), graph, history);
 const timeline = new Timeline($('timeline'));
+const atlas = new TextAtlas();
+const audio = new AudioPlayer();
 let renderer: Renderer | null = null;
 let an: Analysis = analyze(graph.doc);
 let compiled: CompileResult = compileGraph(graph.doc, an);
 let lastCode = '';
-let compileMs = 0;
 
 // ------------------------------------------------------------------ status
 const toastEl = $('toast');
@@ -53,7 +58,6 @@ async function recompile(): Promise<void> {
   lastCode = compiled.code;
   setStatus('compiling…', 'busy');
   const res = await renderer.setScene(compiled.code);
-  compileMs = res.ms;
   const errBox = $('gpu-error');
   if (res.ok) {
     setStatus(`compiled ${compiled.gpuNodes} GPU nodes · ${res.ms.toFixed(0)} ms`, 'ok');
@@ -82,6 +86,7 @@ graph.on((kind: ChangeKind) => {
   if (kind === 'structure' || kind === 'load') {
     editor.rebuild();
     evaluator.reset();
+    particleReset = true;
     void recompile();
   }
   if (kind === 'load') {
@@ -90,7 +95,9 @@ graph.on((kind: ChangeKind) => {
   autosave();
 });
 
-timeline.onSeek = () => {};
+timeline.onSeek = () => {
+  particleReset = true;
+};
 timeline.onDuration = (d) => {
   graph.doc.duration = d;
   history.commit();
@@ -185,16 +192,16 @@ function toggleMax(): void {
 }
 maxBtn.addEventListener('click', toggleMax);
 
-// splitter
-const split = $('split');
+// panel resize (desktop: width, mobile: height)
+const appEl = $('app');
 const splitter = $('splitter');
 splitter.addEventListener('pointerdown', (e) => {
   splitter.setPointerCapture(e.pointerId);
-  const vertical = getComputedStyle(split).flexDirection === 'column';
+  const mobile = window.matchMedia('(max-width: 820px)').matches;
   const move = (ev: PointerEvent) => {
-    const r = split.getBoundingClientRect();
-    const f = vertical ? (ev.clientY - r.top) / r.height : (ev.clientX - r.left) / r.width;
-    split.style.setProperty('--view', `${Math.min(85, Math.max(15, f * 100))}%`);
+    if (mobile) appEl.style.setProperty('--panel-h', `${Math.min(80, Math.max(20, (1 - ev.clientY / window.innerHeight) * 100))}vh`);
+    else appEl.style.setProperty('--panel-w', `${Math.min(window.innerWidth - 240, Math.max(320, window.innerWidth - ev.clientX - 12))}px`);
+    editor.updateWires();
   };
   const up = () => {
     splitter.removeEventListener('pointermove', move);
@@ -204,6 +211,19 @@ splitter.addEventListener('pointerdown', (e) => {
   splitter.addEventListener('pointermove', move);
   splitter.addEventListener('pointerup', up);
 });
+
+/** Offset (in CSS px) from the canvas centre to the centre of the area not covered by panels. */
+function visibleCenterShift(): [number, number] {
+  if (document.body.classList.contains('maximized')) return [0, 0];
+  const panel = $('panel').getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (panel.width === 0) return [0, 0];
+  if (panel.top > vh * 0.3) {
+    // Bottom sheet: centre in the area above it.
+    return [0, (panel.top - vh) / 2];
+  }
+  return [(panel.left - vw) / 2, 0];
+}
 
 // global keys
 window.addEventListener('keydown', (e) => {
@@ -227,13 +247,18 @@ window.addEventListener('keydown', (e) => {
     timeline.seek(0);
   } else if (e.key === '`') {
     toggleMax();
+  } else if (e.key === 'c' && !mod && graphCameraAvailable) {
+    setGraphCamera(!useGraphCamera);
   }
 });
 
 // ------------------------------------------------------------------ render loop
 const canvas = $<HTMLCanvasElement>('view');
 const hud = $('hud');
-camera.attach(canvas, () => {});
+camera.attach(canvas, () => {
+  // Grabbing the viewport while a director camera runs switches to free camera.
+  if (graphCameraAvailable && useGraphCamera) setGraphCamera(false, true);
+});
 const params = new Float32Array(MAX_SLOTS * 4);
 let prevSig = new Float32Array(0);
 let sampleIndex = 0;
@@ -245,6 +270,10 @@ let lastScaleChange = 0;
 let smoothDt = 1 / 60;
 let lastNow = performance.now();
 let fpsAcc = 0, fpsFrames = 0, fps = 0;
+let exporting = false;
+let particleReset = true;
+let lastPaletteAt = 0;
+let lastShift: [number, number] = [0, 0];
 
 function sameSig(a: Float32Array, b: Float32Array): boolean {
   if (a.length !== b.length) return false;
@@ -254,6 +283,7 @@ function sameSig(a: Float32Array, b: Float32Array): boolean {
 
 function frame(now: number): void {
   requestAnimationFrame(frame);
+  if (exporting) return;
   const dt = Math.min(0.1, (now - lastNow) / 1000);
   lastNow = now;
   smoothDt += (dt - smoothDt) * 0.1;
@@ -267,35 +297,23 @@ function frame(now: number): void {
 
   timeline.tick(dt);
   const t = timeline.time;
+  audio.sync(t, timeline.playing);
   const values = evaluator.evaluate(graph.doc, an, t);
   editor.updateLive(values, t);
+  atlas.sync(graph.doc);
   if (!renderer) return;
 
   camera.update(dt);
-  const out = graph.output();
-  const get = (name: string) => (out ? readInput(graph.doc, an, values, out, name) : 0);
-  fillSlots(graph.doc, an, values, compiled.slots, params, 0);
-
-  const cb = camera.basis();
-  const yaw = (asFloat(get('lightYaw')) * Math.PI) / 180;
-  const pitch = (asFloat(get('lightPitch')) * Math.PI) / 180;
-  const sunDir: Vec3 = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
-  const lp = asFloat(get('lightPower'));
-  const f: FrameInputs = {
-    camPos: cb.pos, right: cb.right, up: cb.up, fwd: cb.fwd,
-    tanHalfFov: Math.tan((camera.fov * Math.PI) / 360),
-    sky: asVec3(get('sky')), horizon: asVec3(get('horizon')),
-    sun: asVec3(get('light')).map((c) => c * lp) as Vec3, sunDir,
-    glow: asFloat(get('glow')), fog: asFloat(get('fog')), time: t,
-    steps: 0, sampleIndex: 0, params,
-    exposure: asFloat(get('exposure')), bloom: asFloat(get('bloom')), vignette: asFloat(get('vignette')),
-    grain: asFloat(get('grain')), aberration: asFloat(get('aberration')),
-  };
+  const built = buildFrame({ doc: graph.doc, an, values, compiled, params, atlas, t, orbit: camera, useGraphCamera });
+  if (built.graphCamera !== graphCameraAvailable) {
+    graphCameraAvailable = built.graphCamera;
+    paintCamButton();
+  }
+  const f = built.frame;
 
   // Is the scene still? Then render at full res and accumulate samples.
-  const sig = new Float32Array([...cb.pos, ...cb.fwd, ...f.sky, ...f.horizon, ...f.sun, ...sunDir, f.glow, f.fog, ...params.subarray(0, compiled.slots.length * 4)]);
-  const still = sameSig(sig, prevSig) && renderer.ready;
-  prevSig = sig;
+  const still = sameSig(built.signature, prevSig) && renderer.ready && !(f.particles && timeline.playing);
+  prevSig = built.signature;
   stillFrames = still ? stillFrames + 1 : 0;
 
   // Dynamic resolution while things move.
@@ -316,6 +334,16 @@ function frame(now: number): void {
   sampleIndex = still && !resized ? sampleIndex + 1 : 0;
   f.sampleIndex = sampleIndex;
   f.steps = sampleIndex === 0 ? 180 : 280;
+  const shift = visibleCenterShift();
+  f.lensShift = [shift[0] * dpr * scale, shift[1] * dpr * scale];
+  if (shift[0] !== lastShift[0] || shift[1] !== lastShift[1]) {
+    lastShift = shift;
+    sampleIndex = 0;
+    f.sampleIndex = 0;
+  }
+  f.particleDt = timeline.playing ? dt : 0;
+  f.particleReset = particleReset;
+  particleReset = false;
 
   const MAX_SAMPLES = 96;
   if (sampleIndex <= MAX_SAMPLES || snapshotRequested) renderer.render(f);
@@ -332,11 +360,185 @@ function frame(now: number): void {
     });
   }
 
-  hud.textContent = `${fps.toFixed(0)} fps · ${w}×${h}` +
-    (sampleIndex > 0 ? ` · ${Math.min(sampleIndex, MAX_SAMPLES)} spp` : '') +
-    (compileMs ? ` · shader ${compileMs.toFixed(0)}ms` : '');
+  // The UI borrows its accent colors from the render.
+  if (now - lastPaletteAt > 350) {
+    lastPaletteAt = now;
+    void renderer.samplePalette().then((pal) => pal && applyArtPalette(pal));
+  }
+
+  hud.textContent = `${fps.toFixed(0)} fps \u00b7 ${w}\u00d7${h}` +
+    (sampleIndex > 0 ? ` \u00b7 ${Math.min(sampleIndex, MAX_SAMPLES)} spp` : '') +
+    (f.particles ? ` \u00b7 ${(f.particles.count / 1000).toFixed(0)}k particles` : '') +
+    (useGraphCamera && graphCameraAvailable ? ' \u00b7 \ud83c\udfac director' : '');
   if (renderer.lastError) setStatus(renderer.lastError, 'error');
 }
+
+// ------------------------------------------------------------------ art-reactive UI colors
+const artA: Vec3 = [0.24, 0.95, 0.77];
+const artB: Vec3 = [1, 0.37, 0.54];
+function applyArtPalette(pal: Vec3[]): void {
+  // Pick the two most saturated, reasonably bright samples.
+  const score = (c: Vec3) => {
+    const mx = Math.max(...c), mn = Math.min(...c);
+    return (mx - mn) / (mx + 1e-4) * Math.min(1, mx * 4);
+  };
+  const sorted = [...pal].filter((c) => c.every(isFinite)).sort((a, b) => score(b) - score(a));
+  if (!sorted.length) return;
+  const norm = (c: Vec3): Vec3 => {
+    const mx = Math.max(...c, 1e-4);
+    const v = c.map((x) => x / mx) as Vec3;
+    // Keep it vivid: push saturation up, never let it go grey.
+    const avg = (v[0] + v[1] + v[2]) / 3;
+    return v.map((x) => Math.min(1, Math.max(0.08, avg + (x - avg) * 1.6))) as Vec3;
+  };
+  const a = norm(sorted[0]);
+  let bc = sorted.find((c) => {
+    const n = norm(c);
+    return Math.hypot(n[0] - a[0], n[1] - a[1], n[2] - a[2]) > 0.45;
+  });
+  const b = bc ? norm(bc) : ([a[2], a[0], a[1]] as Vec3);
+  for (let i = 0; i < 3; i++) {
+    artA[i] += (a[i] - artA[i]) * 0.15;
+    artB[i] += (b[i] - artB[i]) * 0.15;
+  }
+  const css = (c: Vec3) => `rgb(${c.map((x) => Math.round(x * 255)).join(' ')})`;
+  document.documentElement.style.setProperty('--art-a', css(artA));
+  document.documentElement.style.setProperty('--art-b', css(artB));
+}
+
+// ------------------------------------------------------------------ director / free camera
+let useGraphCamera = true;
+let graphCameraAvailable = false;
+const camBtn = $('btn-cam');
+function paintCamButton(): void {
+  camBtn.hidden = !graphCameraAvailable;
+  camBtn.textContent = useGraphCamera ? '\ud83c\udfac Director' : '\u270b Free cam';
+  camBtn.classList.toggle('on', useGraphCamera);
+}
+function setGraphCamera(on: boolean, quiet = false): void {
+  if (!on && useGraphCamera) {
+    // Hand over smoothly: start the free camera where the director was.
+    const values = evaluator.values;
+    const built = buildFrame({ doc: graph.doc, an, values, compiled, params, atlas, t: timeline.time, orbit: camera, useGraphCamera: true });
+    const p = built.frame.camPos, fw = built.frame.fwd;
+    const dist = 6;
+    const target: Vec3 = [p[0] + fw[0] * dist, p[1] + fw[1] * dist, p[2] + fw[2] * dist];
+    const yaw = Math.atan2(p[0] - target[0], p[2] - target[2]);
+    const pitch = Math.asin(Math.max(-1, Math.min(1, (p[1] - target[1]) / dist)));
+    camera.set({ yaw, pitch, dist, target }, true);
+  }
+  useGraphCamera = on;
+  paintCamButton();
+  if (!quiet) toast(on ? 'Director camera' : 'Free camera: drag to orbit');
+}
+camBtn.addEventListener('click', () => setGraphCamera(!useGraphCamera));
+
+// ------------------------------------------------------------------ audio
+const audioBtn = $('btn-audio');
+const audioInput = $<HTMLInputElement>('audio-file');
+async function loadAudio(file: File): Promise<void> {
+  setStatus(`analysing ${file.name}\u2026`, 'busy');
+  try {
+    const a = await audio.load(file, file.name);
+    if (a.duration > timeline.duration) {
+      timeline.setDuration(Math.ceil(a.duration));
+      graph.doc.duration = Math.ceil(a.duration);
+    }
+    audioBtn.textContent = `\u266b ${file.name.replace(/\.[^.]+$/, '').slice(0, 18)}`;
+    audioBtn.classList.add('on');
+    setStatus(`audio: ${a.duration.toFixed(1)}s analysed`, 'ok');
+    toast('Audio loaded \u2013 Audio nodes now follow your track');
+    timeline.seek(0);
+  } catch (e) {
+    setStatus('audio failed', 'error');
+    toast(`Could not read audio: ${(e as Error).message}`, 'error');
+  }
+}
+audioBtn.addEventListener('click', () => {
+  if (audio.loaded) {
+    audio.unload();
+    audioBtn.textContent = '\u266b Audio';
+    audioBtn.classList.remove('on');
+    toast('Audio removed \u2013 back to the built-in groove');
+  } else audioInput.click();
+});
+audioInput.addEventListener('change', () => {
+  const f = audioInput.files?.[0];
+  if (f) void loadAudio(f);
+  audioInput.value = '';
+});
+const viewportEl = $('viewport');
+viewportEl.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  viewportEl.classList.add('dropping');
+});
+viewportEl.addEventListener('dragleave', () => viewportEl.classList.remove('dropping'));
+viewportEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  viewportEl.classList.remove('dropping');
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  if (f.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name)) void loadAudio(f);
+  else if (f.name.endsWith('.json')) void f.text().then((txt) => loadDoc(JSON.parse(txt)));
+  else toast('Drop an audio file or a .flux.json scene', 'error');
+});
+
+// ------------------------------------------------------------------ export
+const exportDlg = $<HTMLDialogElement>('export-dialog');
+$('btn-export').addEventListener('click', () => {
+  ($('ex-duration') as HTMLInputElement).value = String(timeline.duration);
+  $('ex-progress').hidden = true;
+  $('ex-go').removeAttribute('disabled');
+  exportDlg.showModal();
+});
+$('ex-cancel').addEventListener('click', () => {
+  exportAbort?.abort();
+  exportDlg.close();
+});
+let exportAbort: AbortController | null = null;
+$('ex-go').addEventListener('click', async () => {
+  if (!renderer || exporting) return;
+  const [w, h] = ($('ex-res') as HTMLSelectElement).value.split('x').map(Number);
+  const fpsOut = Number(($('ex-fps') as HTMLSelectElement).value);
+  const quality = ($('ex-quality') as HTMLSelectElement).value;
+  const samples = quality === 'draft' ? 1 : quality === 'high' ? 8 : 16;
+  const duration = Math.max(0.1, Number(($('ex-duration') as HTMLInputElement).value) || timeline.duration);
+  const bar = $('ex-bar');
+  const label = $('ex-label');
+  $('ex-progress').hidden = false;
+  $('ex-go').setAttribute('disabled', '');
+  exporting = true;
+  exportAbort = new AbortController();
+  audio.stop();
+  const t0 = performance.now();
+  try {
+    const blob = await exportVideo(
+      { renderer, canvas, doc: graph.doc, an, compiled, atlas, orbit: camera, useGraphCamera, audio: audio.audioBuffer },
+      { width: w, height: h, fps: fpsOut, start: 0, duration, samples, shutter: samples > 1 ? 0.5 : 0, bitrate: Math.round(w * h * fpsOut * 0.25) },
+      (frac, i, total) => {
+        bar.style.width = `${(frac * 100).toFixed(1)}%`;
+        const el = (performance.now() - t0) / 1000;
+        const eta = frac > 0 ? (el / frac) * (1 - frac) : 0;
+        label.textContent = `frame ${i}/${total} \u00b7 ${eta.toFixed(0)}s left`;
+      },
+      exportAbort.signal,
+    );
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(graph.doc.name || 'fluxion').replace(/\W+/g, '-').toLowerCase()}.mp4`;
+    a.click();
+    toast(`Exported ${(blob.size / 1e6).toFixed(1)} MB MP4`);
+    exportDlg.close();
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') toast(`Export failed: ${(e as Error).message}`, 'error');
+  } finally {
+    exporting = false;
+    particleReset = true;
+    sampleIndex = 0;
+    prevSig = new Float32Array(0);
+    $('ex-go').removeAttribute('disabled');
+  }
+});
 
 async function captureDataURL(): Promise<string | null> {
   const img = await renderer?.capture();
@@ -352,6 +554,10 @@ let lostCount = 0;
 async function initRenderer(): Promise<void> {
   renderer = await Renderer.create(canvas);
   renderer.present = new URLSearchParams(location.search).get('present') !== '0';
+  const r = renderer;
+  atlas.onUpload = (row, data) => r.writeAtlasRow(row, data);
+  atlas.reset();
+  particleReset = true;
   renderer.onLost = (msg) => {
     renderer = null;
     if (++lostCount > 3) {
@@ -405,4 +611,4 @@ async function boot(): Promise<void> {
 void boot();
 
 // Expose for debugging / automation.
-Object.assign(window, { fluxion: { graph, history, editor, timeline, camera, captureDataURL, get compiled() { return compiled; } } });
+Object.assign(window, { fluxion: { graph, history, editor, timeline, camera, captureDataURL, audio, setGraphCamera, get renderer() { return renderer; }, get compiled() { return compiled; } } });

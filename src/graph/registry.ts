@@ -1,4 +1,16 @@
-import type { CpuValue, Keyframe, SocketType, Vec3 } from './types';
+import type { CameraValue, CpuValue, Keyframe, SocketType, Vec3 } from './types';
+import { BANDS, sampleAudio, type Band } from '../audio/analysis';
+
+/** Fonts available to Text nodes (loaded from Google Fonts in index.html). */
+export const FONTS: Record<string, string> = {
+  display: '800 150px "Unbounded"',
+  grotesk: '700 150px "Space Grotesk"',
+  serif: 'italic 400 150px "Instrument Serif"',
+  condensed: '400 150px "Bebas Neue"',
+  mono: '700 150px "JetBrains Mono"',
+  sans: '800 150px "Inter"',
+  script: '400 150px "Pacifico"',
+};
 
 export interface InputDef {
   name: string;
@@ -12,7 +24,8 @@ export interface InputDef {
 
 export type ParamDef =
   | { name: string; label?: string; kind: 'enum'; options: string[]; default: string }
-  | { name: string; label?: string; kind: 'keys'; default: Keyframe[] };
+  | { name: string; label?: string; kind: 'keys'; default: Keyframe[] }
+  | { name: string; label?: string; kind: 'text'; default: string };
 
 export interface CpuCtx {
   t: number;
@@ -27,6 +40,10 @@ export interface GpuCtx {
   /** WGSL expression for an input, evaluated at position variable `at` (default `p`). */
   in(name: string, at?: string): string;
   param<T = string>(name: string): T;
+  /** A vec4 uniform holding node-internal data supplied by the app (e.g. text atlas rect). */
+  data(name: string): string;
+  /** Whether an input socket has a wire. */
+  connected(name: string): boolean;
 }
 
 export type Domain = 'cpu' | 'gpu' | 'any';
@@ -47,7 +64,7 @@ export interface NodeDef {
   gpu?: (g: GpuCtx) => string;
 }
 
-export type Category = 'Signal' | 'Math' | 'Field' | 'Shape' | 'Combine' | 'Deform' | 'Material' | 'Output';
+export type Category = 'Signal' | 'Math' | 'Field' | 'Shape' | 'Combine' | 'Deform' | 'Material' | 'Camera' | 'FX' | 'Output';
 
 export const CATEGORY_COLORS: Record<Category, string> = {
   Signal: '#ff9f43',
@@ -57,12 +74,14 @@ export const CATEGORY_COLORS: Record<Category, string> = {
   Combine: '#2ec8ff',
   Deform: '#ff5e8a',
   Material: '#ffd166',
+  Camera: '#b8f2ff',
+  FX: '#ffb347',
   Output: '#ffffff',
 };
 
 // ---------- small CPU helpers ----------
-const n = (v: CpuValue | undefined): number => (typeof v === 'number' ? v : v ? v[0] : 0);
-const v3 = (v: CpuValue | undefined): Vec3 => (typeof v === 'number' ? [v, v, v] : v ?? [0, 0, 0]);
+const n = (v: CpuValue | undefined): number => (typeof v === 'number' ? v : Array.isArray(v) ? v[0] : 0);
+const v3 = (v: CpuValue | undefined): Vec3 => (typeof v === 'number' ? [v, v, v] : Array.isArray(v) ? v : [0, 0, 0]);
 const TAU = Math.PI * 2;
 const fract = (x: number) => x - Math.floor(x);
 const smooth = (x: number) => x * x * (3 - 2 * x);
@@ -164,6 +183,90 @@ function mathGpu(op: string, a: string, b: string): string {
 }
 
 const LFO_WAVES = ['sine', 'triangle', 'saw', 'square', 'bounce'];
+
+// ---------- automatic camera ----------
+export const CAM_MODES = ['orbit', 'push-in', 'crane', 'flyby', 'spiral', 'top-down', 'vertigo'];
+const easeInOut = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+interface Pose { pos: Vec3; target: Vec3; fov: number; roll: number }
+
+function shotPose(mode: string, u: number, k: number, t: number, i: Record<string, CpuValue>): Pose {
+  const tgt = [...v3(i.target)] as Vec3; // copy: poses are mutated by shake
+  const dist = n(i.distance), h = n(i.height), fov = n(i.fov), spd = n(i.speed), seed = n(i.seed);
+  const r1 = hash1(k * 3.1 + 1, seed), r2 = hash1(k * 7.7 + 2, seed);
+  // Shots are picked within an arc around the front (+z); 360 = anywhere.
+  const arc = (Math.min(360, Math.max(0, n(i.arc ?? 360))) * Math.PI) / 180;
+  const base = (r1 - 0.5) * arc;
+  const at = (a: number, d: number, y: number): Vec3 => [tgt[0] + Math.sin(a) * d, tgt[1] + y, tgt[2] + Math.cos(a) * d];
+  const e = easeInOut(Math.min(1, Math.max(0, u)));
+  switch (mode) {
+    case 'push-in':
+      return { pos: at(base + u * 0.25 * spd, dist * (1.55 - 0.85 * e), h * 0.5), target: tgt, fov, roll: 0 };
+    case 'crane':
+      return { pos: at(base + u * 0.5 * spd, dist * 0.95, -0.6 + e * dist * 0.85), target: tgt, fov, roll: 0 };
+    case 'flyby': {
+      const along = (u - 0.5) * 2 * dist * 1.1 * spd;
+      const fwd: Vec3 = [Math.sin(base), 0, Math.cos(base)];
+      const side: Vec3 = [Math.cos(base), 0, -Math.sin(base)];
+      const pos = [0, 1, 2].map((c) => tgt[c] + fwd[c] * dist * 0.75 + side[c] * along) as Vec3;
+      pos[1] += h * 0.4;
+      return { pos, target: tgt, fov, roll: (u - 0.5) * 0.25 };
+    }
+    case 'spiral':
+      return { pos: at(base + u * TAU * 0.6 * spd, dist * (1.35 - 0.55 * e), h + (1 - e) * dist * 0.7), target: tgt, fov, roll: 0 };
+    case 'top-down':
+      return { pos: at(base + u * spd, dist * 0.3, dist * 1.05), target: tgt, fov, roll: u * 0.6 };
+    case 'vertigo': {
+      // Dolly zoom: move back while narrowing the lens so the subject keeps its size.
+      const d0 = dist * 0.55, d = dist * (0.55 + 1.1 * e);
+      const f = (2 * Math.atan((Math.tan((fov * Math.PI) / 360) * d0 * 1.6) / d) * 180) / Math.PI;
+      return { pos: at(base, d, h * 0.3), target: tgt, fov: f, roll: 0 };
+    }
+    default: // orbit (ping-pongs inside the arc when it is limited)
+      return { pos: at(arc >= TAU - 1e-3 ? base + t * 0.35 * spd : Math.sin(t * 0.35 * spd) * arc * 0.5, dist, h + Math.sin(t * 0.3) * 0.3), target: tgt, fov, roll: (r2 - 0.5) * 0.05 };
+  }
+}
+
+function directorCamera(i: Record<string, CpuValue>, c: CpuCtx): CameraValue {
+  const t = c.t;
+  const shot = Math.max(0.25, n(i.shot));
+  const seed = n(i.seed);
+  const k = Math.floor(t / shot);
+  const u = (t - k * shot) / shot;
+  const pick = (kk: number) => {
+    if (c.params.mode !== 'director') return String(c.params.mode);
+    return CAM_MODES[Math.floor(hash1(kk * 13.7 + 5, seed) * CAM_MODES.length) % CAM_MODES.length];
+  };
+  const dutch = (kk: number) => (c.params.mode === 'director' ? (hash1(kk * 5.3 + 9, seed) - 0.5) * 0.35 : 0);
+  let p = shotPose(pick(k), u, k, t, i);
+  p.roll += dutch(k);
+  const cut = String(c.params.cut);
+  const blendLen = cut === 'whip' ? Math.min(0.3, shot * 0.3) : cut === 'smooth' ? Math.min(1.2, shot * 0.45) : 0;
+  const into = shot - (t - k * shot); // seconds left in this shot
+  if (blendLen > 0 && into < blendLen) {
+    const w = easeInOut(1 - into / blendLen);
+    const q = shotPose(pick(k + 1), 0, k + 1, t, i);
+    q.roll += dutch(k + 1);
+    const lerp = (a: number, b: number) => a + (b - a) * w;
+    p = {
+      pos: p.pos.map((x, j) => lerp(x, q.pos[j])) as Vec3,
+      target: p.target.map((x, j) => lerp(x, q.target[j])) as Vec3,
+      fov: lerp(p.fov, q.fov),
+      roll: lerp(p.roll, q.roll) + (cut === 'whip' ? Math.sin(w * Math.PI) * 0.6 : 0),
+    };
+  }
+  // Handheld shake: layered noise on position, aim and roll.
+  const sh = n(i.shake);
+  if (sh > 0) {
+    const dist = n(i.distance);
+    const wob = (o: number) => valueNoise(t * 1.3 + o, seed + o) * 0.6 + valueNoise(t * 3.1 + o, seed + o * 2) * 0.4;
+    for (let a = 0; a < 3; a++) {
+      p.pos[a] += wob(a * 11) * sh * 0.06 * dist;
+      p.target[a] += wob(a * 23 + 5) * sh * 0.03 * dist;
+    }
+    p.roll += wob(71) * sh * 0.03;
+  }
+  return { kind: 'camera', pos: [...p.pos] as Vec3, target: [...p.target] as Vec3, fov: p.fov, roll: p.roll };
+}
 
 // ---------- definitions ----------
 const defs: NodeDef[] = [
@@ -657,12 +760,235 @@ const defs: NodeDef[] = [
   return h;`,
   },
 
+  // ===== Text =====
+  {
+    type: 'text', title: 'Text', category: 'Shape', domain: 'gpu', output: 'sdf',
+    description: 'Extruded 3D type with bevel. Any font, any word.',
+    params: [
+      { name: 'text', kind: 'text', default: 'FLUXION' },
+      { name: 'font', kind: 'enum', options: Object.keys(FONTS), default: 'display' },
+    ],
+    inputs: [
+      { name: 'size', type: 'float', default: 1, min: 0.01, step: 0.01 },
+      { name: 'depth', type: 'float', default: 0.3, min: 0, step: 0.01 },
+      { name: 'bevel', type: 'float', default: 0.025, min: 0, step: 0.005 },
+    ],
+    gpu: (g) => `let info = ${g.data('atlas')};
+  let k = ${g.in('size')} / max(info.w, 1.0);
+  let bev = ${g.in('bevel')};
+  let d2 = textSdf2(p.xy, info, k);
+  let w = vec2f(d2 + bev, abs(p.z) - ${g.in('depth')} * 0.5 + bev);
+  return sdMat(min(max(w.x, w.y), 0.0) + length(max(w, vec2f(0.0))) - bev);`,
+  },
+  {
+    type: 'reveal', title: 'Reveal', category: 'Deform', domain: 'gpu', output: 'sdf',
+    description: 'Animated build-on with a glowing edge: wipe, radial, dissolve or slices. Animate progress 0→1.',
+    params: [{ name: 'mode', kind: 'enum', options: ['wipe', 'radial', 'dissolve', 'slices'], default: 'wipe' }],
+    inputs: [
+      { name: 'shape', type: 'sdf' },
+      { name: 'progress', type: 'float', default: 0.5, min: 0, max: 1, step: 0.005 },
+      { name: 'angle', type: 'float', default: 0, step: 1 },
+      { name: 'extent', type: 'float', default: 4, min: 0.01, step: 0.05 },
+      { name: 'edge', label: 'edge glow', type: 'float', default: 6, min: 0, step: 0.1 },
+      { name: 'edgeColor', label: 'edge color', type: 'color', default: [0.2, 1, 0.85] },
+    ],
+    gpu: (g) => {
+      const m = g.param('mode');
+      const cut =
+        m === 'radial' ? `length(p) - pr * ext`
+        : m === 'dissolve' ? `(fbm(p * 2.2, 3) * 0.5 + 0.5 - pr * 1.1 + 0.05) * 0.45`
+        : m === 'slices' ? `abs(fract(p.y * 3.0) - 0.5) / 3.0 - pr * 0.1667`
+        : `dot(p, vec3f(cos(an), sin(an), 0.0)) - mix(-ext, ext, pr)`;
+      return `let pr = clamp(${g.in('progress')}, 0.0, 1.0);
+  let ext = ${g.in('extent')};
+  let an = ${g.in('angle')} * 0.01745329;
+  let c = ${cut};
+  var h = ${g.in('shape')};
+  h.d = max(h.d, c);
+  let e = exp(-abs(c) * 22.0) * step(0.002, pr) * step(pr, 0.998);
+  h.col = mix(h.col, ${g.in('edgeColor')}, clamp(e * 1.4, 0.0, 1.0));
+  h.mat.z += ${g.in('edge')} * e;
+  return h;`;
+    },
+  },
+  {
+    type: 'shots', title: 'Shots', category: 'Combine', domain: 'gpu', output: 'sdf',
+    description: 'Cuts between up to 4 shapes on a timer with cinematic transitions.',
+    params: [{ name: 'transition', kind: 'enum', options: ['dissolve', 'pop', 'swirl', 'slice', 'wipe', 'morph'], default: 'dissolve' }],
+    inputs: [
+      { name: 'a', type: 'sdf' },
+      { name: 'b', type: 'sdf' },
+      { name: 'c', type: 'sdf' },
+      { name: 'd', type: 'sdf' },
+      { name: 'shot', label: 'shot length', type: 'float', default: 3, min: 0.2, step: 0.05 },
+      { name: 'length', label: 'transition', type: 'float', default: 0.9, min: 0, step: 0.05 },
+      { name: 'offset', label: 'time offset', type: 'float', default: 0, step: 0.05 },
+      { name: 'edge', label: 'edge glow', type: 'float', default: 5, min: 0, step: 0.1 },
+      { name: 'edgeColor', label: 'edge color', type: 'color', default: [1, 0.3, 0.7] },
+    ],
+    gpu: (g) => {
+      const ins = ['a', 'b', 'c', 'd'].filter((x) => g.connected(x));
+      const list = ins.length ? ins : ['a'];
+      const N = list.length;
+      const pick = (v: string, idx: string, at: string) =>
+        list.map((name, i) => `${i ? ' else ' : ''}if (${idx} == ${i}) { ${v} = ${g.in(name, at)}; }`).join('');
+      const mode = g.param('transition');
+      let pre = '';
+      let post = '';
+      switch (mode) {
+        case 'pop':
+          pre = `let sa = max(1.0 - easeInBack(pr), 0.002);\n  let sb = max(easeOutBack(pr), 0.002);\n  qa = p / sa;\n  qb = p / sb;`;
+          post = `A.d *= sa;\n  B.d *= sb;\n  return opU(A, B, 0.0);`;
+          break;
+        case 'swirl':
+          pre = `qa = twistY(p, pr * 7.0);\n  qb = twistY(p, (pr - 1.0) * 7.0);`;
+          post = `let w = smoothstep(0.25, 0.75, pr);\n  return Sd(mix(A.d, B.d, w) * 0.55, mix(A.col, B.col, w), mix(A.mat, B.mat, w));`;
+          break;
+        case 'slice':
+          pre = `let sl = select(-1.0, 1.0, sin(p.y * 9.0) > 0.0) * 7.0;\n  qa = p - vec3f(sl * pr * pr * pr, 0.0, 0.0);\n  let q1 = 1.0 - pr;\n  qb = p + vec3f(sl * q1 * q1 * q1, 0.0, 0.0);`;
+          post = `var r = opU(A, B, 0.0);\n  r.d *= 0.5;\n  return r;`;
+          break;
+        case 'wipe':
+          post = `let sw = mix(-5.0, 5.0, pr);\n  let c = p.x - sw;\n  A.d = max(A.d, -c);\n  B.d = max(B.d, c);\n  var r = opU(A, B, 0.0);\n  let e = exp(-abs(c) * 20.0);\n  r.col = mix(r.col, EC, clamp(e * 1.4, 0.0, 1.0));\n  r.mat.z += EG * e;\n  return r;`;
+          break;
+        case 'morph':
+          post = `return Sd(mix(A.d, B.d, pr), mix(A.col, B.col, pr), mix(A.mat, B.mat, pr));`;
+          break;
+        default: // dissolve
+          post = `let nz = fbm(p * 2.4, 3) * 0.5 + 0.5;\n  A.d = max(A.d, (pr - nz) * 0.45);\n  B.d = max(B.d, (nz - pr) * 0.45);\n  var r = opU(A, B, 0.0);\n  let e = exp(-abs(nz - pr) * 30.0);\n  r.col = mix(r.col, EC, clamp(e * 1.4, 0.0, 1.0));\n  r.mat.z += EG * e;\n  return r;`;
+      }
+      return `let T = max(U.fx.z + ${g.in('offset')}, 0.0);
+  let dur = max(${g.in('shot')}, 0.1);
+  let tr = clamp(${g.in('length')}, 0.0, dur);
+  let k = floor(T / dur);
+  let local = T - k * dur;
+  let i = i32(k) % ${N};
+  let j = (i + 1) % ${N};
+  var pr = 0.0;
+  if (tr > 0.0) { pr = clamp((local - (dur - tr)) / tr, 0.0, 1.0); }
+  pr = pr * pr * (3.0 - 2.0 * pr);
+  let EC = ${g.in('edgeColor')};
+  let EG = ${g.in('edge')};
+  var qa = p;
+  var qb = p;
+  ${pre}
+  var A = sdEmpty();
+  ${pick('A', 'i', 'qa')}
+  if (pr <= 0.0) { return A; }
+  var B = sdEmpty();
+  ${pick('B', 'j', 'qb')}
+  ${post}`;
+    },
+  },
+  {
+    type: 'scatter', title: 'Scatter', category: 'Deform', domain: 'gpu', output: 'sdf',
+    description: 'Scatter random copies through space: jitter, random scale, spin and gaps. Animate evolve.',
+    inputs: [
+      { name: 'shape', type: 'sdf' },
+      { name: 'spacing', type: 'float', default: 1.2, min: 0.05, step: 0.01 },
+      { name: 'jitter', type: 'float', default: 0.25, min: 0, max: 0.45, step: 0.01 },
+      { name: 'scaleVar', label: 'scale var', type: 'float', default: 0.6, min: 0, max: 1, step: 0.01 },
+      { name: 'density', type: 'float', default: 0.6, min: 0, max: 1, step: 0.01 },
+      { name: 'spin', type: 'float', default: 0.5, step: 0.01 },
+      { name: 'evolve', type: 'float', default: 0, step: 0.01 },
+      { name: 'radius', label: 'bounds', type: 'float', default: 4, min: 0.1, step: 0.05 },
+    ],
+    gpu: (g) => `let sp = max(${g.in('spacing')}, 0.05);
+  let cell = floor(p / sp + 0.5);
+  let rnd = hash33(cell + vec3f(17.0, 3.0, 9.0)) * 0.5 + 0.5;
+  let rnd2 = hash33(cell + vec3f(-5.0, 41.0, 13.0)) * 0.5 + 0.5;
+  let ev = ${g.in('evolve')};
+  let jit = (vec3f(sin(ev + rnd.x * 6.28), cos(ev * 0.8 + rnd.y * 6.28), sin(ev * 0.6 + rnd.z * 6.28)) * ${g.in('jitter')}) * sp;
+  let sc = mix(1.0, rnd2.x * 0.8 + 0.2, ${g.in('scaleVar')});
+  let ang = (rnd2.yzx - 0.5) * 6.28 * ${g.in('spin')} + vec3f(ev * (rnd2.x - 0.5));
+  let q = invRotate(p - cell * sp - jit, ang) / sc;
+  var h = ${g.in('shape', 'q')};
+  h.d *= sc * 0.7;
+  let keep = rnd2.z < ${g.in('density')} && length(cell * sp) < ${g.in('radius')};
+  if (!keep) { h = sdEmpty(); h.d = sp * 0.5; }
+  let bound = length(p) - ${g.in('radius')} - sp;
+  if (bound > 0.0) { h.d = max(h.d, bound); }
+  return h;`,
+  },
+
+  // ===== Camera =====
+  {
+    type: 'camera', title: 'Camera', category: 'Camera', domain: 'cpu', output: 'camera',
+    description: 'A manual camera. Wire signals into position for your own moves.',
+    inputs: [
+      { name: 'position', type: 'vec3', default: [3, 1.5, 5], step: 0.01 },
+      { name: 'target', type: 'vec3', default: [0, 0, 0], step: 0.01 },
+      { name: 'fov', type: 'float', default: 45, min: 5, max: 140, step: 0.5 },
+      { name: 'roll', type: 'float', default: 0, step: 0.5 },
+    ],
+    cpu: (i) => ({ kind: 'camera', pos: [...v3(i.position)] as Vec3, target: [...v3(i.target)] as Vec3, fov: n(i.fov), roll: (n(i.roll) * Math.PI) / 180 }),
+  },
+  {
+    type: 'director', title: 'Director', category: 'Camera', domain: 'cpu', output: 'camera',
+    description: 'Automatic cinematography: orbits, push-ins, cranes, fly-bys, vertigo zooms, handheld shake and cuts on the beat.',
+    params: [
+      { name: 'mode', kind: 'enum', options: ['director', ...CAM_MODES], default: 'director' },
+      { name: 'cut', kind: 'enum', options: ['smooth', 'cut', 'whip'], default: 'smooth' },
+    ],
+    inputs: [
+      { name: 'target', type: 'vec3', default: [0, 0, 0], step: 0.01 },
+      { name: 'distance', type: 'float', default: 6, min: 0.2, step: 0.05 },
+      { name: 'height', type: 'float', default: 1.2, step: 0.05 },
+      { name: 'fov', type: 'float', default: 42, min: 5, max: 140, step: 0.5 },
+      { name: 'shot', label: 'shot length', type: 'float', default: 4, min: 0.25, step: 0.05 },
+      { name: 'speed', type: 'float', default: 1, step: 0.01 },
+      { name: 'shake', type: 'float', default: 0.25, min: 0, step: 0.01 },
+      { name: 'arc', label: 'arc (deg)', type: 'float', default: 360, min: 0, max: 360, step: 1 },
+      { name: 'seed', type: 'float', default: 3, step: 1 },
+    ],
+    cpu: (i, c) => directorCamera(i, c),
+  },
+
+  // ===== Audio =====
+  {
+    type: 'audio', title: 'Audio', category: 'Signal', domain: 'cpu', output: 'float',
+    description: 'Audio-reactive signal. Drop a track on the viewport; without one it plays a built-in 120 BPM groove.',
+    params: [{ name: 'band', kind: 'enum', options: BANDS, default: 'bass' }],
+    inputs: [
+      { name: 'gain', type: 'float', default: 1, step: 0.01 },
+      { name: 'offset', type: 'float', default: 0, step: 0.01 },
+    ],
+    cpu: (i, c) => sampleAudio(c.params.band as Band, c.t) * n(i.gain) + n(i.offset),
+  },
+
+  // ===== Particles =====
+  {
+    type: 'particles', title: 'Particles', category: 'FX', domain: 'cpu', output: 'particles',
+    description: 'Up to 1M GPU particles in curl-noise flow. Cling makes them crawl over your shapes and text.',
+    params: [{ name: 'emitter', kind: 'enum', options: ['surface', 'sphere', 'ring', 'burst', 'rain'], default: 'surface' }],
+    inputs: [
+      { name: 'count', type: 'float', default: 60000, min: 100, max: 1000000, step: 1000 },
+      { name: 'size', type: 'float', default: 0.012, min: 0.001, step: 0.001 },
+      { name: 'speed', type: 'float', default: 0.6, step: 0.01 },
+      { name: 'turbulence', type: 'float', default: 1, min: 0, step: 0.01 },
+      { name: 'cling', type: 'float', default: 0.8, min: 0, max: 1, step: 0.01 },
+      { name: 'gravity', type: 'float', default: 0, step: 0.01 },
+      { name: 'life', type: 'float', default: 3, min: 0.1, step: 0.05 },
+      { name: 'spread', type: 'float', default: 2.5, min: 0.01, step: 0.05 },
+      { name: 'intensity', type: 'float', default: 4, min: 0, step: 0.05 },
+      { name: 'color', type: 'color', default: [0.3, 1, 0.9] },
+      { name: 'color2', label: 'fade to', type: 'color', default: [1, 0.2, 0.6] },
+    ],
+    cpu: (i, c) => ({
+      kind: 'particles', emitter: String(c.params.emitter), count: Math.round(n(i.count)), size: n(i.size), speed: n(i.speed),
+      turbulence: n(i.turbulence), cling: n(i.cling), gravity: n(i.gravity), life: n(i.life), spread: n(i.spread),
+      intensity: n(i.intensity), color: v3(i.color), color2: v3(i.color2),
+    }),
+  },
+
   // ===== Output =====
   {
     type: 'output', title: 'Output', category: 'Output', domain: 'cpu', output: null,
     description: 'The final render: scene, environment light and lens effects.',
     inputs: [
       { name: 'shape', type: 'sdf' },
+      { name: 'camera', type: 'camera' },
+      { name: 'particles', type: 'particles' },
       { name: 'sky', type: 'color', default: [0.05, 0.06, 0.12] },
       { name: 'horizon', type: 'color', default: [0.35, 0.2, 0.45] },
       { name: 'light', type: 'color', default: [1, 0.92, 0.85] },
@@ -676,6 +1002,10 @@ const defs: NodeDef[] = [
       { name: 'aberration', type: 'float', default: 0.3, min: 0, step: 0.01 },
       { name: 'grain', type: 'float', default: 0.04, min: 0, step: 0.005 },
       { name: 'vignette', type: 'float', default: 0.35, min: 0, step: 0.01 },
+      { name: 'flash', type: 'float', default: 0, min: 0, step: 0.01 },
+      { name: 'glitch', type: 'float', default: 0, min: 0, step: 0.01 },
+      { name: 'letterbox', type: 'float', default: 0, min: 0, max: 1, step: 0.01 },
+      { name: 'hue', label: 'hue shift', type: 'float', default: 0, step: 0.005 },
     ],
   },
 ];

@@ -46,8 +46,10 @@ export function analyze(doc: GraphDoc): Analysis {
   return { order, domain, invalidLinks, linkInto };
 }
 
-export const asVec3 = (v: CpuValue | undefined): Vec3 => (typeof v === 'number' ? [v, v, v] : v ?? [0, 0, 0]);
-export const asFloat = (v: CpuValue | undefined): number => (typeof v === 'number' ? v : v ? v[0] : 0);
+export const asVec3 = (v: CpuValue | undefined): Vec3 =>
+  typeof v === 'number' ? [v, v, v] : Array.isArray(v) ? v : [0, 0, 0];
+export const asFloat = (v: CpuValue | undefined): number =>
+  typeof v === 'number' ? v : Array.isArray(v) ? v[0] : 0;
 
 /**
  * Evaluates all CPU-domain nodes for a given time. Stateful nodes (springs)
@@ -101,6 +103,12 @@ export class Evaluator {
       const inputs: Record<string, CpuValue> = {};
       for (const inp of def.inputs) {
         if (inp.type === 'sdf') continue;
+        if (inp.type === 'camera' || inp.type === 'particles') {
+          const l = an.linkInto.get(key(node.id, inp.name));
+          const v = l ? this.values.get(l.from) : undefined;
+          if (v !== undefined) inputs[inp.name] = v;
+          continue;
+        }
         inputs[inp.name] = readInput(doc, an, this.values, node, inp.name);
       }
       let st = this.state.get(node.id);
@@ -123,7 +131,8 @@ export function readInput(doc: GraphDoc, an: Analysis, values: Map<number, CpuVa
   const link = an.linkInto.get(key(node.id, name));
   let v: CpuValue | undefined;
   if (link && !an.invalidLinks.has(link.id) && an.domain.get(link.from) === 'cpu') v = values.get(link.from);
-  if (v === undefined) v = node.values[name] ?? inp.default ?? 0;
   void doc;
+  if (inp.type === 'camera' || inp.type === 'particles') return v as CpuValue;
+  if (v === undefined) v = node.values[name] ?? inp.default ?? 0;
   return inp.type === 'float' ? asFloat(v) : asVec3(v);
 }

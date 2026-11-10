@@ -6,44 +6,95 @@
     <title>Fluxion</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Instrument+Serif:ital@1&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&family=Pacifico&family=Space+Grotesk:wght@700&family=Unbounded:wght@500;800&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="app">
-      <header class="topbar">
-        <div class="brand"><span class="logo"></span>FLUXION</div>
+      <section class="viewport" id="viewport">
+        <canvas id="view"></canvas>
+        <div class="viewport-error" id="gpu-error" hidden></div>
+        <div class="drop-hint">Drop audio to make it react &middot; drop a .flux.json to open</div>
+      </section>
+
+      <header class="topbar glass">
+        <div class="brand"><span class="logo"></span><span class="wordmark">FLUXION</span></div>
         <select id="demo" title="Load a demo scene"></select>
         <div class="tb-group">
           <button id="btn-new" title="New scene">New</button>
           <button id="btn-open" title="Open .flux.json">Open</button>
           <button id="btn-save" title="Save .flux.json (Ctrl+S)">Save</button>
-          <button id="btn-share" title="Copy a shareable link">Share link</button>
+          <button id="btn-share" title="Copy a shareable link">Share</button>
         </div>
         <div class="tb-group">
           <button id="btn-undo" title="Undo (Ctrl+Z)">&#8630;</button>
           <button id="btn-redo" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
         </div>
         <div class="tb-group">
-          <button id="btn-orbit" title="Auto-orbit the camera">Orbit</button>
-          <button id="btn-snap" title="Save a PNG of the viewport">Snapshot</button>
-          <button id="btn-max" title="Maximize viewport (`)">Maximize</button>
+          <button id="btn-cam" title="Switch between the Director camera and free orbit (C)" hidden>Director</button>
+          <button id="btn-orbit" title="Auto-orbit the free camera">Orbit</button>
+          <button id="btn-audio" title="Load a track for Audio nodes (or drop one on the canvas)">&#9835; Audio</button>
         </div>
         <div class="spacer"></div>
         <div id="status" class="status"></div>
+        <div class="tb-group">
+          <button id="btn-snap" title="Save a PNG">PNG</button>
+          <button id="btn-max" title="Hide panels (`)">Focus</button>
+        </div>
+        <button id="btn-export" class="cta" title="Render an MP4 with motion blur">Export&nbsp;MP4</button>
       </header>
-      <main class="split" id="split">
-        <section class="viewport" id="viewport">
-          <canvas id="view"></canvas>
-          <div class="hud" id="hud"></div>
-          <div class="viewport-error" id="gpu-error" hidden></div>
-          <div class="viewport-hint">drag: orbit &middot; shift/right-drag: pan &middot; wheel: zoom &middot; double-click: reset</div>
-        </section>
-        <div class="splitter" id="splitter"></div>
+
+      <aside class="panel glass" id="panel">
+        <div class="panel-grip" id="splitter" title="Drag to resize"></div>
         <section class="editor" id="editor"></section>
-      </main>
-      <footer id="timeline"></footer>
+      </aside>
+
+      <div class="hud" id="hud"></div>
+      <footer id="timeline" class="glass"></footer>
       <div id="toast" class="toast"></div>
       <input type="file" id="file" accept=".json,application/json" hidden />
+      <input type="file" id="audio-file" accept="audio/*" hidden />
+
+      <dialog id="export-dialog" class="glass">
+        <h2>Export video</h2>
+        <p class="muted">Rendered offline frame by frame, with real motion blur and supersampling. Audio is included if a track is loaded.</p>
+        <div class="ex-grid">
+          <label>Format
+            <select id="ex-res">
+              <option value="1920x1080">1080p &middot; 16:9</option>
+              <option value="1280x720">720p &middot; 16:9</option>
+              <option value="3840x2160">4K &middot; 16:9</option>
+              <option value="1080x1920">Story &middot; 9:16</option>
+              <option value="1080x1350">Portrait &middot; 4:5</option>
+              <option value="1080x1080">Square &middot; 1:1</option>
+            </select>
+          </label>
+          <label>Frame rate
+            <select id="ex-fps">
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+              <option value="24">24 fps (cinema)</option>
+            </select>
+          </label>
+          <label>Quality
+            <select id="ex-quality">
+              <option value="high">High &middot; 8&times; motion blur</option>
+              <option value="ultra">Ultra &middot; 16&times; motion blur</option>
+              <option value="draft">Draft &middot; fast preview</option>
+            </select>
+          </label>
+          <label>Length (s)
+            <input id="ex-duration" type="number" min="0.1" step="0.5" />
+          </label>
+        </div>
+        <div id="ex-progress" class="ex-progress" hidden>
+          <div class="ex-track"><div id="ex-bar" class="ex-bar"></div></div>
+          <div id="ex-label" class="muted mono"></div>
+        </div>
+        <div class="ex-actions">
+          <button id="ex-cancel">Cancel</button>
+          <button id="ex-go" class="cta">Render</button>
+        </div>
+      </dialog>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

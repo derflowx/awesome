@@ -8,7 +8,11 @@ export interface Slot {
   node: number;
   input: string;
   type: SocketType;
+  /** Node-internal data (e.g. text atlas rects) supplied at fill time. */
+  data?: boolean;
 }
+
+export type DataProvider = (nodeId: number, name: string) => ArrayLike<number> | undefined;
 
 export interface CompileResult {
   /** Generated WGSL: one function per GPU node plus `sceneMap`. */
@@ -18,7 +22,7 @@ export interface CompileResult {
   gpuNodes: number;
 }
 
-const WGSL_TYPE: Record<SocketType, string> = { float: 'f32', vec3: 'vec3f', color: 'vec3f', sdf: 'Sd' };
+const WGSL_TYPE: Record<SocketType, string> = { float: 'f32', vec3: 'vec3f', color: 'vec3f', sdf: 'Sd', camera: 'f32', particles: 'f32' };
 
 function convert(expr: string, from: SocketType, to: SocketType): string {
   if (from === 'float' && (to === 'vec3' || to === 'color')) return `vec3f(${expr})`;
@@ -38,8 +42,8 @@ export function compileGraph(doc: GraphDoc, an: Analysis): CompileResult {
   const emitted = new Set<number>();
   const errors: string[] = [];
 
-  const slotFor = (node: GraphNode, input: string, type: SocketType): string => {
-    const k = `${node.id}:${input}`;
+  const slotFor = (node: GraphNode, input: string, type: SocketType, data = false): string => {
+    const k = `${node.id}:${data ? '#' : ''}${input}`;
     let idx = slotIndex.get(k);
     if (idx === undefined) {
       idx = slots.length;
@@ -47,10 +51,11 @@ export function compileGraph(doc: GraphDoc, an: Analysis): CompileResult {
         if (!errors.length) errors.push(`Too many parameters (max ${MAX_SLOTS})`);
         idx = MAX_SLOTS - 1;
       } else {
-        slots.push({ node: node.id, input, type });
+        slots.push({ node: node.id, input, type, data });
       }
       slotIndex.set(k, idx);
     }
+    if (data) return `U.p[${idx}]`;
     return type === 'float' ? `U.p[${idx}].x` : `U.p[${idx}].xyz`;
   };
 
@@ -79,6 +84,8 @@ export function compileGraph(doc: GraphDoc, an: Analysis): CompileResult {
     const body = def.gpu({
       in: (name, at = 'p') => inputExpr(node, name, at),
       param: <T,>(name: string) => node.params[name] as T,
+      data: (name) => slotFor(node, name, 'vec3', true),
+      connected: (name) => !!an.linkInto.get(`${node.id}:${name}`),
     });
     fns.push(`// ${def.title} #${node.id}\nfn n${node.id}(p: vec3f) -> ${WGSL_TYPE[def.output]} {\n  ${body}\n}`);
   };
@@ -98,17 +105,23 @@ export function fillSlots(
   slots: Slot[],
   out: Float32Array,
   offset: number,
+  data?: DataProvider,
 ): void {
   const byId = new Map(doc.nodes.map((n) => [n.id, n]));
   slots.forEach((s, i) => {
     const node = byId.get(s.node);
     if (!node) return;
-    const v = readInput(doc, an, values, node, s.input);
     const o = offset + i * 4;
+    if (s.data) {
+      const d = data?.(s.node, s.input);
+      for (let k = 0; k < 4; k++) out[o + k] = d?.[k] ?? 0;
+      return;
+    }
+    const v = readInput(doc, an, values, node, s.input);
     if (typeof v === 'number') {
       out[o] = v;
       out[o + 1] = out[o + 2] = 0;
-    } else {
+    } else if (Array.isArray(v)) {
       out[o] = v[0];
       out[o + 1] = v[1];
       out[o + 2] = v[2];

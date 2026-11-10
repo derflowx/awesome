@@ -151,6 +151,18 @@ export class NodeEditor {
           }),
         );
         body.append(row);
+      } else if (p.kind === 'text') {
+        const row = el('div', 'row text-row');
+        const inp = el('input', 'text-input');
+        inp.value = String(n.params[p.name] ?? '');
+        inp.spellcheck = false;
+        inp.placeholder = 'Type something loud';
+        inp.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        inp.addEventListener('keydown', (ev) => ev.stopPropagation());
+        inp.addEventListener('input', () => this.graph.setParam(n.id, p.name, inp.value));
+        inp.addEventListener('change', () => this.history.commit());
+        row.append(inp);
+        body.append(row);
       } else if (p.kind === 'keys') {
         const keys = (n.params[p.name] as Keyframe[]) ?? [];
         const ce = new CurveEditor(
@@ -309,11 +321,25 @@ export class NodeEditor {
         continue;
       }
       const v = values.get(link.from);
-      label.textContent = v === undefined ? '' : typeof v === 'number' ? fmt(v) : v.map((x) => x.toFixed(2)).join(' ');
+      label.textContent = v === undefined ? '' : typeof v === 'number' ? fmt(v) : Array.isArray(v) ? v.map((x) => x.toFixed(2)).join(' ') : v.kind;
       void nid; void inp;
     }
     for (const ce of this.curves.values()) ce.setPlayhead(t);
+    // Wires carrying signals pulse with their value.
+    for (const l of this.graph.doc.links) {
+      const w = this.wireEls.get(l.id);
+      if (!w || this.an.domain.get(l.from) !== 'cpu') continue;
+      const v = values.get(l.from);
+      if (typeof v !== 'number') continue;
+      let r = this.ranges.get(l.from);
+      if (!r) this.ranges.set(l.from, (r = { lo: v, hi: v }));
+      r.lo = Math.min(v, r.lo + (r.hi - r.lo) * 0.002);
+      r.hi = Math.max(v, r.hi - (r.hi - r.lo) * 0.002);
+      const k = r.hi - r.lo > 1e-6 ? (v - r.lo) / (r.hi - r.lo) : 0.5;
+      w.style.setProperty('--pulse', k.toFixed(3));
+    }
   }
+  private ranges = new Map<number, { lo: number; hi: number }>();
 
   // ---------------------------------------------------------------- selection
   select(id: number, additive: boolean): void {

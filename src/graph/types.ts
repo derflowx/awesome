@@ -1,8 +1,38 @@
 /** Value types that flow through sockets. */
-export type SocketType = 'float' | 'vec3' | 'color' | 'sdf';
+export type SocketType = 'float' | 'vec3' | 'color' | 'sdf' | 'camera' | 'particles';
 
 export type Vec3 = [number, number, number];
-export type CpuValue = number | Vec3;
+
+/** A camera pose produced by camera nodes. */
+export interface CameraValue {
+  kind: 'camera';
+  pos: Vec3;
+  target: Vec3;
+  fov: number;
+  roll: number;
+}
+
+/** Settings for the GPU particle system. */
+export interface ParticleValue {
+  kind: 'particles';
+  emitter: string;
+  count: number;
+  size: number;
+  speed: number;
+  turbulence: number;
+  cling: number;
+  life: number;
+  spread: number;
+  intensity: number;
+  color: Vec3;
+  color2: Vec3;
+  gravity: number;
+}
+
+export type CpuValue = number | Vec3 | CameraValue | ParticleValue;
+
+/** Socket types that only connect to themselves and have no literal value. */
+export const OPAQUE_TYPES: SocketType[] = ['sdf', 'camera', 'particles'];
 
 export interface Keyframe {
   t: number;
@@ -47,7 +77,7 @@ export interface GraphDoc {
 
 export function canConnect(from: SocketType, to: SocketType): boolean {
   if (from === to) return true;
-  if (from === 'sdf' || to === 'sdf') return false;
+  if (OPAQUE_TYPES.includes(from) || OPAQUE_TYPES.includes(to)) return false;
   if (to === 'float') return false; // vec3 -> float is ambiguous
   return true; // float -> vec3/color, vec3 <-> color
 }
@@ -57,4 +87,6 @@ export const TYPE_COLORS: Record<SocketType, string> = {
   vec3: '#ffcf5c',
   color: '#ff6ec7',
   sdf: '#3cf2c4',
+  camera: '#f4f1ff',
+  particles: '#ffb347',
 };

@@ -76,16 +76,23 @@ Bloom, anamorphic flares, chromatic aberration, film grain, depth of field, temp
 - [x] 4 demo scenes that look great out of the box
 
 ### Phase 1: Motion power
-- [ ] GPU particles plus forces (curl, attractor, vortex)
-- [ ] Fields and effectors, cloners
-- [ ] Audio-reactive nodes
+- [x] GPU particles: curl flow, surface cling, collisions, gravity (attractor/vortex forces still to do)
+- [x] Fields and effectors, cloners
+- [x] Audio-reactive nodes
 - [ ] Live per-node thumbnails
-- [ ] MP4/WebM export via WebCodecs
+- [x] MP4/WebM export via WebCodecs
+
+### Also shipped in Phase 1
+- [x] 3D text with 7 fonts, Reveal build-ons
+- [x] Shots node with 6 cinematic transitions
+- [x] Director camera: automatic moves, cuts, shake
+- [x] Glitch, flash, letterbox, hue shift
+- [x] Floating-glass UI with art-reactive colours
 
 ### Phase 2: The novel ideas
 - [ ] Evolve mode
 - [ ] Motion brush
-- [ ] Iridescence, dispersion and chrome materials
+- [x] Iridescence and chrome materials (spectral dispersion still to do)
 - [ ] Code node (inline WGSL)
 - [ ] AI copilot
 

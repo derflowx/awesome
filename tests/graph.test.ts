@@ -6,9 +6,9 @@ import { DEMOS, blankDoc } from '../src/demos';
 import { NODE_DEFS, sampleKeys } from '../src/graph/registry';
 import { kitchenSink } from './kitchenSink';
 
-function demoGraph(i: number): Graph {
+function demoGraph(name: string): Graph {
   const g = new Graph();
-  g.load(DEMOS[i].build());
+  g.load(DEMOS.find((d) => d.name === name)!.build());
   return g;
 }
 
@@ -65,8 +65,8 @@ describe('domain inference', () => {
 
 describe('compiler', () => {
   it('compiles every demo without errors and within the slot budget', () => {
-    DEMOS.forEach((_, i) => {
-      const g = demoGraph(i);
+    DEMOS.forEach((d) => {
+      const g = demoGraph(d.name);
       const res = compileGraph(g.doc, analyze(g.doc));
       expect(res.errors).toEqual([]);
       expect(res.slots.length).toBeLessThan(MAX_SLOTS);
@@ -75,7 +75,7 @@ describe('compiler', () => {
   });
 
   it('does not change code when only values change (no recompiles while tweaking)', () => {
-    const g = demoGraph(0);
+    const g = demoGraph('Liquid Chrome');
     const a = compileGraph(g.doc, analyze(g.doc)).code;
     const sphere = g.doc.nodes.find((n) => n.type === 'sphere')!;
     g.setValue(sphere.id, 'radius', 3.3);
@@ -124,7 +124,7 @@ describe('compiler', () => {
 
 describe('signals', () => {
   it('springs are deterministic when scrubbing', () => {
-    const g = demoGraph(2); // Gyroid Heart uses pulse -> spring
+    const g = demoGraph('Gyroid Heart'); // uses pulse -> spring
     const an = analyze(g.doc);
     const spring = g.doc.nodes.find((n) => n.type === 'spring')!;
     const playing = new Evaluator();
@@ -142,5 +142,50 @@ describe('signals', () => {
     expect(sampleKeys(keys, 1.5, 'linear', 'loop')).toBeCloseTo(5);
     expect(sampleKeys(keys, 1.5, 'linear', 'pingpong')).toBeCloseTo(5);
     expect(sampleKeys(keys, 5, 'linear', 'once')).toBe(10);
+  });
+});
+
+describe('motion nodes', () => {
+  it('director camera is deterministic and moves', () => {
+    const g = demoGraph('Title Sequence');
+    const an = analyze(g.doc);
+    const dir = g.doc.nodes.find((n) => n.type === 'director')!;
+    const a = new Evaluator().evaluate(g.doc, an, 1.234).get(dir.id) as { pos: number[] };
+    const b = new Evaluator().evaluate(g.doc, an, 1.234).get(dir.id) as { pos: number[] };
+    const c = new Evaluator().evaluate(g.doc, an, 2.5).get(dir.id) as { pos: number[] };
+    expect(a.pos).toEqual(b.pos);
+    expect(a.pos).not.toEqual(c.pos);
+    expect(a.pos.every(Number.isFinite)).toBe(true);
+  });
+
+  it('every director mode yields finite poses across a shot boundary', () => {
+    const g = demoGraph('Title Sequence');
+    const dir = g.doc.nodes.find((n) => n.type === 'director')!;
+    for (const mode of ['director', 'orbit', 'push-in', 'crane', 'flyby', 'spiral', 'top-down', 'vertigo']) {
+      for (const cut of ['smooth', 'cut', 'whip']) {
+        g.setParam(dir.id, 'mode', mode);
+        g.setParam(dir.id, 'cut', cut);
+        const an = analyze(g.doc);
+        for (let t = 0; t < 8; t += 0.37) {
+          const v = new Evaluator().evaluate(g.doc, an, t).get(dir.id) as { pos: number[]; target: number[]; fov: number };
+          expect([...v.pos, ...v.target, v.fov].every(Number.isFinite)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('shots compiles one branch per connected input', () => {
+    const g = demoGraph('Shot Reel');
+    const res = compileGraph(g.doc, analyze(g.doc));
+    const shots = g.doc.nodes.find((n) => n.type === 'shots')!;
+    const fn = res.code.split(`fn n${shots.id}(`)[1].split('\nfn ')[0];
+    expect(fn).toContain('if (i == 3)');
+    expect(fn).not.toContain('if (i == 4)');
+  });
+
+  it('text nodes reserve an atlas data slot', () => {
+    const g = demoGraph('Title Sequence');
+    const res = compileGraph(g.doc, analyze(g.doc));
+    expect(res.slots.some((s) => s.data && s.input === 'atlas')).toBe(true);
   });
 });

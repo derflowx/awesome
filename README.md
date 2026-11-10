@@ -6,9 +6,11 @@ You wire nodes together and the graph is compiled live into one GPU shader. Ever
 
 ![status](https://img.shields.io/badge/phase-0-3cf2c4)
 
-![Demo scenes: Liquid Chrome, Neon Fractal, Gyroid Heart, Kinetic Ring](docs/demos.png)
+![New demos: Title Sequence, Shot Reel, Audio Reactor, Type Lab, Particle Storm](docs/demos-v2.png)
 
-*The four built-in demos, rendered by the app on a software GPU at low resolution.*
+![Phase 0 demos: Liquid Chrome, Neon Fractal, Gyroid Heart, Kinetic Ring](docs/demos.png)
+
+*Built-in demos, rendered by the app itself on a software GPU at low resolution.*
 
 ## Try it
 
@@ -28,20 +30,37 @@ Open the printed URL in **Chrome, Edge or Arc (desktop)**, or **Safari 26+**. We
 
 Slow GPU? Add `?scale=0.5` to the URL to cap the render resolution.
 
-## What's in Phase 0
+## Features
 
+### Motion design (Phase 1)
+| Area | Features |
+|---|---|
+| **3D Text** | Any word in 7 Google fonts (display, grotesk, serif italic, condensed, mono, sans, script), extruded with bevel. Baked to a signed distance field, so it melts, twists, displaces and morphs like any other shape |
+| **Reveal** | Animated build-ons with a glowing edge: wipe, radial, dissolve, slices. Wire Keyframes into `progress` |
+| **Shots** | Cuts between up to 4 shapes on a timer with transitions: dissolve, pop, swirl, slice, wipe, morph |
+| **Director camera** | Automatic cinematography: orbit, push-in, crane, fly-by, spiral, top-down, vertigo (dolly zoom), auto-mixed per shot with dutch angles, smooth / hard cut / whip transitions, handheld shake, arc limit. Or wire your own Camera node. `C` toggles director / free camera |
+| **GPU particles** | Up to 1M particles in curl-noise flow, simulated in a compute shader that reads your scene, so they **cling to and crawl over** shapes and text, collide, fall and burst. Emitters: surface, sphere, ring, burst, rain. Depth-aware glow |
+| **Audio** | Drop a track on the canvas: it is analysed offline into bass / mid / high / level / beat, so scrubbing and export are exact. Without a track, a built-in 120 BPM groove drives the demos |
+| **Lens FX** | Glitch (block tearing, RGB split, scanlines), flash, hue shift, cinematic letterbox, on top of bloom, AgX, aberration, grain, vignette |
+| **Scatter** | Random instancing: jitter, scale, spin, density, evolve |
+| **MP4 export** | Offline render with up to 16× sub-frame motion blur + supersampling, 720p to 4K, 9:16 / 4:5 / 1:1, 24/30/60 fps, audio muxed in. H.264 (VP9 fallback) |
+
+### UI
+- **The render is the app**: the canvas fills the window and the editor floats over it as glass. The camera's lens is shifted so the subject stays centred in the visible area.
+- **Art-reactive colour**: accents (logo, buttons, timeline, selection, sliders) are sampled live from your render.
+- Wires carrying signals pulse with their values. Nodes spring in. Drop files anywhere on the canvas.
+
+### Core (Phase 0)
 | Area | Features |
 |---|---|
 | **Renderer** | SDF raymarcher, GGX shading, soft shadows, AO, real reflections, thin-film iridescence, volumetric emissive glow, fog, procedural sky |
-| **Post** | Physically based bloom (13-tap mip chain), AgX tone mapping, chromatic aberration, film grain, vignette |
 | **Quality** | Dynamic resolution while moving; when still it renders at full res with progressive jittered supersampling (up to 96 spp) |
-| **Graph compiler** | Graph → WGSL. Signals run on the CPU and fields/shapes on the GPU, inferred automatically. All values are uniforms, so dragging a slider never recompiles; only wiring changes do, and the old shader keeps rendering until the new one is ready |
-| **Signals** | Time, LFO (5 waves), Wiggle (fractal noise), Pulse (BPM envelope), Spring (physical, with **deterministic scrubbing**), Keyframes (inline curve editor, smooth/linear/expo/back/step, loop/ping-pong) |
-| **Shapes** | Sphere, Box, Torus, Octahedron, Floor, Gyroid, Mandelbulb |
-| **Combine / Deform** | Smooth Union / Subtract / Intersect, Morph, Transform, Twist, Bend, Repeat, Radial Array, Mirror, Displace, Shell |
-| **Fields & Math** | Position, Noise Field, Wave Field, Distance, Math (13 ops), Remap, Vector, Component, Color, Palette (6 cosine presets), Mix Color |
-| **Editor** | Pan/zoom canvas, typed colored sockets, drag-to-connect, re-route by dragging an input, drop a wire on empty space to get a filtered node search, scrubbable number fields (Shift = fine, Ctrl = coarse, click to type math like `2*pi`), live sparklines on signals, live values on wires, CPU/GPU badges |
-| **Workflow** | Undo/redo, copy/paste/duplicate, autosave, save/open `.flux.json`, **share links** (the whole graph compressed into the URL), PNG snapshot, timeline with scrub and loop |
+| **Graph compiler** | Graph → WGSL. Signals run on the CPU and fields/shapes on the GPU, inferred automatically. Values are uniforms, so dragging a slider never recompiles |
+| **Signals** | Time, LFO, Wiggle, Pulse, Spring (deterministic scrubbing), Keyframes (inline curve editor), Audio |
+| **Shapes** | Text, Sphere, Box, Torus, Octahedron, Floor, Gyroid, Mandelbulb |
+| **Combine / Deform** | Union / Subtract / Intersect (smooth), Morph, Shots, Transform, Twist, Bend, Repeat, Radial Array, Mirror, Displace, Shell, Scatter, Reveal |
+| **Fields & Math** | Position, Noise, Wave, Distance, Math, Remap, Vector, Component, Color, Palette, Mix Color |
+| **Workflow** | Undo/redo, copy/paste, autosave, save/open, share links (graph in the URL), PNG snapshots |
 
 ## Shortcuts
 
@@ -55,7 +74,8 @@ Slow GPU? Add `?scale=0.5` to the URL to cap the render resolution.
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 | `Ctrl+S` | Save file |
 | `F` | Frame all nodes |
-| `` ` `` | Maximize viewport |
+| `` ` `` | Focus mode (hide panels) |
+| `C` | Director / free camera |
 
 Viewport controls: drag to orbit, Shift-drag or right-drag to pan, wheel to zoom, double-click to reset the camera.
 
@@ -71,8 +91,12 @@ src/
     compile.ts     graph -> WGSL, uniform slot allocation
     history.ts     undo/redo
   gpu/
-    shaders.ts     WGSL: SDF library, raymarcher, bloom, AgX composite
-    renderer.ts    WebGPU pipelines, ping-pong accumulation, capture
+    shaders.ts     WGSL: SDF library, text SDF, raymarcher, particles, bloom, AgX + lens FX
+    renderer.ts    WebGPU pipelines, accumulation, particles, capture, palette readback
+    textAtlas.ts   text -> signed distance field atlas (exact EDT)
+  audio/           offline FFT analysis + playback synced to the timeline
+  export/          WebCodecs MP4 export with motion blur
+  engine.ts        builds a frame from the graph (shared by live view and export)
   editor/          node editor, widgets, quick-add palette
   ui/              timeline, orbit camera
   demos.ts         built-in scenes
@@ -98,4 +122,4 @@ node scripts/validate-shaders.mjs
 
 ## Roadmap
 
-See [GAMEPLAN.md](GAMEPLAN.md). Next up is Phase 1: GPU particles, fields and effectors, audio-reactive nodes, live per-node thumbnails and video export.
+See [GAMEPLAN.md](GAMEPLAN.md). Next up: live per-node thumbnails, Evolve mode, motion brush, inline WGSL code node, AI copilot.

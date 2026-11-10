@@ -18,7 +18,8 @@ export function kitchenSink(): GraphDoc {
       if (inp.type === 'sdf') g.connect(g.addNode('sphere', 0, 0).id, n.id, inp.name);
       else if (inp.type === 'float') g.connect(def.domain === 'cpu' ? sig() : field(), n.id, inp.name);
     }
-    if (def.output === 'sdf') pieces.push(n.id);
+    if (def.output === 'camera' || def.output === 'particles') g.connect(n.id, out.id, def.output);
+    else if (def.output === 'sdf') pieces.push(n.id);
     else if (def.output === 'float') {
       const d = g.addNode('displace', 0, 0);
       g.connect(g.addNode('sphere', 0, 0).id, d.id, 'shape');
